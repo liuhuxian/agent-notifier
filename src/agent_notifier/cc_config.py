@@ -62,6 +62,23 @@ def _upsert_command(
     )
 
 
+def _remove_command(source: str, name: str) -> str:
+    parts = COMMAND_START.split(source)
+    kept = []
+    for block in parts:
+        current_name = re.search(
+            r'(?m)^\s*name\s*=\s*"([^"]+)"\s*$', block
+        )
+        if (
+            re.match(r"^\s*\[\[commands\]\]", block)
+            and current_name
+            and current_name.group(1) == name
+        ):
+            continue
+        kept.append(block)
+    return "".join(kept)
+
+
 def _configure_approval_commands(source: str, command: str) -> str:
     source = _upsert_command(
         source,
@@ -75,12 +92,25 @@ def _configure_approval_commands(source: str, command: str) -> str:
         "Deny a pending Codex permission request",
         f"{command} decide deny {{{{1}}}}",
     )
-    return _upsert_command(
+    source = _upsert_command(
         source,
-        "codex-switch",
-        "Route future Feishu tasks to a subscribed Codex thread",
-        f"{command} activate {{{{1}}}}",
+        "agent-list",
+        "List subscribed sessions for one coding agent",
+        f"{command} agent-list {{{{1}}}}",
     )
+    source = _upsert_command(
+        source,
+        "agent-current",
+        "Show current coding-agent task targets",
+        f"{command} agent-current",
+    )
+    source = _upsert_command(
+        source,
+        "agent-switch",
+        "Switch one coding agent to a subscribed session",
+        f"{command} agent-switch {{{{1}}}} {{{{2}}}}",
+    )
+    return _remove_command(source, "codex-switch")
 
 
 def configure_project(source: str, project_name: str, command: str) -> str:

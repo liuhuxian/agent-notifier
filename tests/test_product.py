@@ -64,9 +64,17 @@ type = "opencode"
             'exec = "/home/me/.local/bin/agent-notifier decide deny {{1}}"',
             result,
         )
-        self.assertIn('name = "codex-switch"', result)
+        self.assertNotIn('name = "codex-switch"', result)
         self.assertIn(
-            'exec = "/home/me/.local/bin/agent-notifier activate {{1}}"',
+            'exec = "/home/me/.local/bin/agent-notifier agent-list {{1}}"',
+            result,
+        )
+        self.assertIn(
+            'exec = "/home/me/.local/bin/agent-notifier agent-current"',
+            result,
+        )
+        self.assertIn(
+            'exec = "/home/me/.local/bin/agent-notifier agent-switch {{1}} {{2}}"',
             result,
         )
 
@@ -97,6 +105,9 @@ exec = "python3 old.py deny {{1}}"
         self.assertNotIn("old.py", once)
         self.assertEqual(1, once.count('name = "codex-approve"'))
         self.assertEqual(1, once.count('name = "codex-deny"'))
+        self.assertEqual(1, once.count('name = "agent-list"'))
+        self.assertEqual(1, once.count('name = "agent-current"'))
+        self.assertEqual(1, once.count('name = "agent-switch"'))
 
 
 class ApprovalMessageTest(unittest.TestCase):

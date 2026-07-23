@@ -11,7 +11,10 @@ from agent_notifier.cli import (
     approval_decision_message,
     bind_terminal_thread,
     build_parser,
+    current_agent_sessions,
+    list_agent_sessions,
     reply_approval_decision,
+    switch_agent_session,
 )
 from agent_notifier.config import Paths
 from agent_notifier.registry import SessionRegistry
@@ -59,6 +62,18 @@ class CodexBindingTest(unittest.TestCase):
         )
         self.assertEqual("thread-1", args.thread_id)
         self.assertEqual("le-wm", args.project)
+
+    def test_agent_command_parsers(self):
+        listed = build_parser().parse_args(["agent-list", "codex"])
+        current = build_parser().parse_args(["agent-current"])
+        switched = build_parser().parse_args(
+            ["agent-switch", "codex", "019e81c0"]
+        )
+
+        self.assertEqual("codex", listed.provider)
+        self.assertEqual("agent-current", current.command)
+        self.assertEqual("codex", switched.provider)
+        self.assertEqual("019e81c0", switched.session_id)
 
     def test_quiet_card_callback_reports_already_handled_approval(self):
         message = approval_decision_message(
@@ -159,6 +174,94 @@ class CodexBindingTest(unittest.TestCase):
                 },
             )
             registry.close()
+
+    def test_agent_list_current_and_short_id_switch_are_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "019f8dfd-130a-7a92-a115-f437e38e40a8",
+                "/workspace/old",
+            )
+            registry.subscribe(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "019e81c0-c415-7820-8921-2b32f1bee990",
+                "/workspace/le-wm",
+            )
+            registry.bind(
+                "cc_connect",
+                "other",
+                "feishu:two",
+                "other-thread",
+                "/workspace/other",
+            )
+            registry.close()
+
+            listed = list_agent_sessions(
+                paths,
+                "codex",
+                project="le-wm-codex",
+                external_key="feishu:one",
+            )
+            self.assertIn("* 019f8dfd", listed)
+            self.assertIn("  019e81c0", listed)
+            self.assertNotIn("other-thread", listed)
+
+            current = current_agent_sessions(
+                paths,
+                project="le-wm-codex",
+                external_key="feishu:one",
+            )
+            self.assertIn("codex: 019f8dfd", current)
+
+            switched = switch_agent_session(
+                paths,
+                "codex",
+                "019e81c0",
+                project="le-wm-codex",
+                external_key="feishu:one",
+            )
+            self.assertEqual(
+                "019e81c0-c415-7820-8921-2b32f1bee990",
+                switched.thread_id,
+            )
+
+            current = current_agent_sessions(
+                paths,
+                project="le-wm-codex",
+                external_key="feishu:one",
+            )
+            self.assertIn("codex: 019e81c0", current)
+
+    def test_agent_switch_rejects_unknown_provider_and_ambiguous_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect", "le-wm", "feishu:one", "abcd-1111", "/one"
+            )
+            registry.subscribe(
+                "cc_connect", "le-wm", "feishu:one", "abcd-2222", "/two"
+            )
+            registry.close()
+
+            with self.assertRaisesRegex(ValueError, "unsupported agent provider"):
+                list_agent_sessions(paths, "opencode")
+            with self.assertRaisesRegex(ValueError, "ambiguous"):
+                switch_agent_session(
+                    paths,
+                    "codex",
+                    "abcd",
+                    project="le-wm",
+                    external_key="feishu:one",
+                )
 
 
 class ApprovalReplyTest(unittest.IsolatedAsyncioTestCase):

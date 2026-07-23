@@ -111,6 +111,131 @@ def activate_terminal_thread(
         registry.close()
 
 
+def _agent_adapter(provider: str) -> str:
+    normalized = provider.lower()
+    if normalized != "codex":
+        raise ValueError(
+            f"unsupported agent provider {provider!r}; supported: codex"
+        )
+    return "cc_connect"
+
+
+def list_agent_sessions(
+    paths: Paths,
+    provider: str,
+    project: str | None = None,
+    external_key: str | None = None,
+) -> str:
+    adapter = _agent_adapter(provider)
+    registry = SessionRegistry(paths.state_db)
+    try:
+        subscriptions = registry.list_subscriptions(
+            adapter, project=project, external_key=external_key
+        )
+        active_routes = registry.list_routes(adapter, project=project)
+        if external_key is not None:
+            active_routes = [
+                route
+                for route in active_routes
+                if route.external_key == external_key
+            ]
+    finally:
+        registry.close()
+
+    active = {
+        (route.project, route.external_key, route.thread_id)
+        for route in active_routes
+    }
+    lines = [f"Agent sessions ({provider.lower()})"]
+    seen = set()
+    for session in subscriptions:
+        key = (session.project, session.external_key, session.thread_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        marker = "*" if key in active else " "
+        lines.append(
+            f"{marker} {session.short_thread_id} | {session.thread_id} | "
+            f"{session.session_label} | {session.cwd}"
+        )
+    if not seen:
+        lines.append("(none)")
+    return "\n".join(lines)
+
+
+def current_agent_sessions(
+    paths: Paths,
+    project: str | None = None,
+    external_key: str | None = None,
+) -> str:
+    registry = SessionRegistry(paths.state_db)
+    try:
+        routes = registry.list_routes("cc_connect", project=project)
+    finally:
+        registry.close()
+    if external_key is not None:
+        routes = [
+            route for route in routes if route.external_key == external_key
+        ]
+
+    lines = ["Current agent sessions"]
+    if not routes:
+        lines.append("codex: (none)")
+    else:
+        for route in routes:
+            lines.append(
+                f"codex: {route.short_thread_id} | {route.thread_id} | "
+                f"{route.session_label} | {route.cwd}"
+            )
+    return "\n".join(lines)
+
+
+def switch_agent_session(
+    paths: Paths,
+    provider: str,
+    session_id: str,
+    project: str | None = None,
+    external_key: str | None = None,
+):
+    adapter = _agent_adapter(provider)
+    registry = SessionRegistry(paths.state_db)
+    try:
+        subscriptions = registry.list_subscriptions(
+            adapter, project=project, external_key=external_key
+        )
+        exact = [
+            route for route in subscriptions if route.thread_id == session_id
+        ]
+        matches = exact or [
+            route
+            for route in subscriptions
+            if route.thread_id.startswith(session_id)
+        ]
+        unique = {
+            (route.project, route.external_key, route.thread_id): route
+            for route in matches
+        }
+        if not unique:
+            raise ValueError(
+                f"no subscribed {provider} session matches {session_id!r}"
+            )
+        if len(unique) > 1:
+            raise ValueError(
+                f"ambiguous {provider} session prefix {session_id!r}; "
+                "use a longer session ID"
+            )
+        route = next(iter(unique.values()))
+        return registry.bind(
+            route.adapter,
+            route.project,
+            route.external_key,
+            route.thread_id,
+            route.cwd,
+        )
+    finally:
+        registry.close()
+
+
 async def decide_approval(paths: Paths, decision: str, approval_id: str) -> str:
     connector = UnixConnector(path=str(paths.proxy_socket))
     async with ClientSession(connector=connector) as session:
@@ -357,6 +482,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     activate.add_argument("thread_id")
     activate.add_argument("--project")
+    agent_list = sub.add_parser(
+        "agent-list", help="list subscribed sessions for one coding agent"
+    )
+    agent_list.add_argument("provider")
+    agent_list.add_argument("--project")
+    agent_list.add_argument("--external-key")
+    agent_current = sub.add_parser(
+        "agent-current", help="show current coding-agent task targets"
+    )
+    agent_current.add_argument("--project")
+    agent_current.add_argument("--external-key")
+    agent_switch = sub.add_parser(
+        "agent-switch", help="switch one coding agent to a subscribed session"
+    )
+    agent_switch.add_argument("provider")
+    agent_switch.add_argument("session_id")
+    agent_switch.add_argument("--project")
+    agent_switch.add_argument("--external-key")
     decide = sub.add_parser(
         "decide", help="resolve a pending Codex approval request"
     )
@@ -437,6 +580,41 @@ def main() -> None:
                 project=args.project,
             )
             print(f"active: {mapping.project} -> {mapping.thread_id}")
+        elif args.command == "agent-list":
+            print(
+                list_agent_sessions(
+                    paths,
+                    args.provider,
+                    project=args.project or os.environ.get("CC_PROJECT"),
+                    external_key=(
+                        args.external_key or os.environ.get("CC_SESSION_KEY")
+                    ),
+                )
+            )
+        elif args.command == "agent-current":
+            print(
+                current_agent_sessions(
+                    paths,
+                    project=args.project or os.environ.get("CC_PROJECT"),
+                    external_key=(
+                        args.external_key or os.environ.get("CC_SESSION_KEY")
+                    ),
+                )
+            )
+        elif args.command == "agent-switch":
+            mapping = switch_agent_session(
+                paths,
+                args.provider,
+                args.session_id,
+                project=args.project or os.environ.get("CC_PROJECT"),
+                external_key=(
+                    args.external_key or os.environ.get("CC_SESSION_KEY")
+                ),
+            )
+            print(
+                f"active: {args.provider.lower()} | "
+                f"{mapping.short_thread_id} | {mapping.thread_id}"
+            )
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(

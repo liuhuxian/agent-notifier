@@ -199,16 +199,24 @@ agent-notifier codex --notify-project le-wm-codex resume <THREAD_ID>
 agent-notifier bind <THREAD_ID> --project le-wm-codex
 ```
 
-从飞书选择后续普通任务要发送到哪个已订阅 thread：
+从飞书查询和切换 Coding Agent 会话：
 
 ```text
-/codex-switch <THREAD_ID>
+/agent-list codex
+/agent-current
+/agent-switch codex <THREAD_ID或唯一短ID>
 ```
 
-也可以在本机切换：
+当前只实现 `codex` provider；后续接入 OpenCode 后沿用相同命令，例如
+`/agent-list opencode`。`/agent-current` 会统一显示各 provider 当前的普通任务
+目标。
+
+本机对应命令：
 
 ```bash
-agent-notifier activate <THREAD_ID> --project le-wm-codex
+agent-notifier agent-list codex --project le-wm-codex
+agent-notifier agent-current --project le-wm-codex
+agent-notifier agent-switch codex <THREAD_ID或唯一短ID> --project le-wm-codex
 ```
 
 该操作只改变 active task target。其他已订阅 thread 的权限审批、完成和失败通知
@@ -241,7 +249,8 @@ systemctl --user restart agent-notifier
 
 这些命令只管理 cc-connect 自己创建或加载的 ACP session，不会列出所有 Codex
 历史 thread。终端恢复的 thread 应通过上述自动绑定或 `agent-notifier bind`
-关联飞书通知路由；使用 `/codex-switch` 在这些终端 thread 之间切换任务目标。
+关联飞书通知路由；使用 `/agent-list codex` 查询已订阅 thread，再通过
+`/agent-switch codex <ID>` 切换任务目标。
 
 ## 卸载
 
