@@ -12,6 +12,7 @@ from agent_notifier.cli import (
     bind_terminal_thread,
     build_parser,
     current_agent_sessions,
+    format_agent_switch,
     list_agent_sessions,
     reply_approval_decision,
     switch_agent_session,
@@ -74,6 +75,28 @@ class CodexBindingTest(unittest.TestCase):
         self.assertEqual("agent-current", current.command)
         self.assertEqual("codex", switched.provider)
         self.assertEqual("019e81c0", switched.session_id)
+
+    def test_agent_switch_result_is_feishu_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            mapping = registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "019e81c0-c415-7820-8921-2b32f1bee990",
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            self.assertEqual(
+                "Agent 会话已切换\n\n"
+                "类型：codex\n"
+                "会话：019e81c0\n"
+                "目录：/workspace/le-wm",
+                format_agent_switch("codex", mapping),
+            )
 
     def test_quiet_card_callback_reports_already_handled_approval(self):
         message = approval_decision_message(
@@ -209,8 +232,15 @@ class CodexBindingTest(unittest.TestCase):
                 project="le-wm-codex",
                 external_key="feishu:one",
             )
-            self.assertIn("* 019f8dfd", listed)
-            self.assertIn("  019e81c0", listed)
+            self.assertIn("Codex 会话（2）", listed)
+            self.assertIn("[当前] 019f8dfd", listed)
+            self.assertIn("[可用] 019e81c0", listed)
+            self.assertIn(
+                "[当前] 019f8dfd\n目录：/workspace/old\n\n"
+                "[可用] 019e81c0",
+                listed,
+            )
+            self.assertNotIn("019f8dfd-130a-7a92-a115-f437e38e40a8", listed)
             self.assertNotIn("other-thread", listed)
 
             current = current_agent_sessions(
@@ -218,7 +248,10 @@ class CodexBindingTest(unittest.TestCase):
                 project="le-wm-codex",
                 external_key="feishu:one",
             )
-            self.assertIn("codex: 019f8dfd", current)
+            self.assertIn("当前 Agent 会话", current)
+            self.assertIn("类型：codex", current)
+            self.assertIn("会话：019f8dfd", current)
+            self.assertIn("目录：/workspace/old", current)
 
             switched = switch_agent_session(
                 paths,
@@ -237,7 +270,8 @@ class CodexBindingTest(unittest.TestCase):
                 project="le-wm-codex",
                 external_key="feishu:one",
             )
-            self.assertIn("codex: 019e81c0", current)
+            self.assertIn("会话：019e81c0", current)
+            self.assertIn("目录：/workspace/le-wm", current)
 
     def test_agent_switch_rejects_unknown_provider_and_ambiguous_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:

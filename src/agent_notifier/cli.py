@@ -120,6 +120,10 @@ def _agent_adapter(provider: str) -> str:
     return "cc_connect"
 
 
+def _agent_provider_label(provider: str) -> str:
+    return {"codex": "Codex"}.get(provider.lower(), provider)
+
+
 def list_agent_sessions(
     paths: Paths,
     provider: str,
@@ -146,21 +150,33 @@ def list_agent_sessions(
         (route.project, route.external_key, route.thread_id)
         for route in active_routes
     }
-    lines = [f"Agent sessions ({provider.lower()})"]
     seen = set()
-    for session in subscriptions:
+    sessions = []
+    ordered = sorted(
+        subscriptions,
+        key=lambda session: (
+            session.project,
+            session.external_key,
+            session.thread_id,
+        )
+        not in active,
+    )
+    for session in ordered:
         key = (session.project, session.external_key, session.thread_id)
         if key in seen:
             continue
         seen.add(key)
-        marker = "*" if key in active else " "
-        lines.append(
-            f"{marker} {session.short_thread_id} | {session.thread_id} | "
-            f"{session.session_label} | {session.cwd}"
+        marker = "当前" if key in active else "可用"
+        sessions.append(
+            f"[{marker}] {session.short_thread_id}\n"
+            f"目录：{session.cwd}"
         )
-    if not seen:
-        lines.append("(none)")
-    return "\n".join(lines)
+    title = f"{_agent_provider_label(provider)} 会话（{len(sessions)}）"
+    if not sessions:
+        return f"{title}\n\n（暂无已订阅会话）"
+    return f"{title}\n\n" + "\n\n".join(sessions) + (
+        f"\n\n切换：\n/agent-switch {provider.lower()} <短ID>"
+    )
 
 
 def current_agent_sessions(
@@ -178,16 +194,17 @@ def current_agent_sessions(
             route for route in routes if route.external_key == external_key
         ]
 
-    lines = ["Current agent sessions"]
+    lines = []
     if not routes:
-        lines.append("codex: (none)")
+        lines.append("类型：codex\n会话：（未绑定）")
     else:
         for route in routes:
             lines.append(
-                f"codex: {route.short_thread_id} | {route.thread_id} | "
-                f"{route.session_label} | {route.cwd}"
+                "类型：codex\n"
+                f"会话：{route.short_thread_id}\n"
+                f"目录：{route.cwd}"
             )
-    return "\n".join(lines)
+    return "当前 Agent 会话\n\n" + "\n\n".join(lines)
 
 
 def switch_agent_session(
@@ -234,6 +251,15 @@ def switch_agent_session(
         )
     finally:
         registry.close()
+
+
+def format_agent_switch(provider: str, mapping) -> str:
+    return (
+        "Agent 会话已切换\n\n"
+        f"类型：{provider.lower()}\n"
+        f"会话：{mapping.short_thread_id}\n"
+        f"目录：{mapping.cwd}"
+    )
 
 
 async def decide_approval(paths: Paths, decision: str, approval_id: str) -> str:
@@ -611,10 +637,7 @@ def main() -> None:
                     args.external_key or os.environ.get("CC_SESSION_KEY")
                 ),
             )
-            print(
-                f"active: {args.provider.lower()} | "
-                f"{mapping.short_thread_id} | {mapping.thread_id}"
-            )
+            print(format_agent_switch(args.provider, mapping))
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(
