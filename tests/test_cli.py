@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime
@@ -463,6 +464,25 @@ class CodexBindingTest(unittest.TestCase):
                 "/workspace/le-wm",
             )
             registry.close()
+            connection = sqlite3.connect(paths.state_db)
+            connection.execute(
+                """
+                UPDATE session_mappings
+                SET updated_at = datetime('now', '-10 minutes')
+                WHERE thread_id = ?
+                """,
+                (stale_thread,),
+            )
+            connection.execute(
+                """
+                UPDATE notification_subscriptions
+                SET updated_at = datetime('now', '-10 minutes')
+                WHERE thread_id = ?
+                """,
+                (stale_thread,),
+            )
+            connection.commit()
+            connection.close()
 
             with patch.dict("os.environ", {"CODEX_HOME": str(codex_home)}):
                 listed = list_agent_sessions(
@@ -487,6 +507,43 @@ class CodexBindingTest(unittest.TestCase):
                         "cc_connect", "le-wm-codex", "feishu:one"
                     )
                 ],
+            )
+            registry.close()
+
+    def test_agent_list_keeps_fresh_thread_before_rollout_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            paths.ensure_directories()
+            codex_home = root / "codex"
+            (codex_home / "sessions").mkdir(parents=True)
+            fresh_thread = "019f8e4b-130a-7a92-a115-f437e38e40a8"
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                fresh_thread,
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            with patch.dict("os.environ", {"CODEX_HOME": str(codex_home)}):
+                listed = list_agent_sessions(
+                    paths,
+                    "codex",
+                    project="le-wm-codex",
+                    external_key="feishu:one",
+                )
+
+            self.assertIn("Codex 会话（1）", listed)
+            self.assertIn("[当前] 019f8e4b", listed)
+            registry = SessionRegistry(paths.state_db)
+            self.assertEqual(
+                fresh_thread,
+                registry.get(
+                    "cc_connect", "le-wm-codex", "feishu:one"
+                ).thread_id,
             )
             registry.close()
 

@@ -214,7 +214,9 @@ agent-notifier bind <THREAD_ID> --project le-wm-codex
 
 `/agent-new codex` 通过 Agent Notifier 管理的共享 Codex App Server 创建一个
 全新的 Codex thread，自动订阅通知，并立即将当前飞书聊天的普通任务目标切换到
-新 thread。创建失败时不会改变原来的活动路由。
+新 thread。创建失败时不会改变原来的活动路由。空 thread 在收到第一条普通消息
+前可能尚无 rollout 文件；会话列表会为新注册 thread 保留 5 分钟落盘保护期，
+避免将其误判为已删除会话。
 
 当前只实现 `codex` provider；后续接入 OpenCode 后沿用相同命令，例如
 `/agent-new opencode` 和 `/agent-list opencode`。`/agent-current` 会统一显示各
