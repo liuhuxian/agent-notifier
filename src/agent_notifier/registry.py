@@ -95,6 +95,32 @@ class SessionRegistry:
             ).fetchone()
         return SessionMapping(*row) if row else None
 
+    def list_routes(
+        self, adapter: str, project: str | None = None
+    ) -> list[SessionMapping]:
+        with self._lock:
+            if project is None:
+                rows = self._conn.execute(
+                    """
+                    SELECT adapter, project, external_key, thread_id, cwd
+                    FROM session_mappings
+                    WHERE adapter = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (adapter,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT adapter, project, external_key, thread_id, cwd
+                    FROM session_mappings
+                    WHERE adapter = ? AND project = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (adapter, project),
+                ).fetchall()
+        return [SessionMapping(*row) for row in rows]
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

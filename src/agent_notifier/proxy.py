@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from collections import deque
@@ -15,6 +16,9 @@ from aiohttp import ClientSession, UnixConnector, WSMsgType, web
 
 from .approvals import ApprovalAlreadyResolved, ApprovalStore
 from .policy import should_send_completion_notification
+
+
+logger = logging.getLogger(__name__)
 
 
 APPROVAL_METHODS = {
@@ -134,13 +138,14 @@ class AppServerProxy:
             self.listen_socket.unlink()
         app = web.Application()
         app.router.add_get("/", self._websocket)
+        app.router.add_get("/rpc", self._websocket)
         self.runner = web.AppRunner(app)
         await self.runner.setup()
         await web.UnixSite(self.runner, str(self.listen_socket)).start()
         os.chmod(self.listen_socket, 0o600)
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
-        downstream = web.WebSocketResponse(heartbeat=30)
+        downstream = web.WebSocketResponse(heartbeat=30, max_msg_size=0)
         await downstream.prepare(request)
         client_kind = request.query.get("client") or "terminal"
         client_id = f"{client_kind}:{uuid.uuid4()}"
@@ -149,33 +154,67 @@ class AppServerProxy:
         connector = UnixConnector(path=str(self.upstream_socket))
         session = ClientSession(connector=connector)
         try:
-            upstream = await session.ws_connect("http://localhost/", heartbeat=30)
+            upstream = await session.ws_connect(
+                "http://localhost/", heartbeat=30, max_msg_size=0
+            )
 
             async def downstream_to_upstream() -> None:
-                async for message in downstream:
-                    if message.type != WSMsgType.TEXT:
-                        continue
-                    payload = json.loads(message.data)
-                    if await self.fanout.resolve(payload, client_kind):
-                        continue
-                    if payload.get("method") in {"turn/start", "turn/steer"}:
-                        thread_id = (payload.get("params") or {}).get("threadId")
-                        if thread_id:
-                            self._thread_origins[thread_id] = client_kind
-                    await upstream.send_json(payload)
-
+                message_type = None
+                method = None
+                request_id = None
+                try:
+                    async for message in downstream:
+                        message_type = message.type
+                        if message.type != WSMsgType.TEXT:
+                            continue
+                        payload = json.loads(message.data)
+                        if isinstance(payload, dict):
+                            method = payload.get("method")
+                            request_id = payload.get("id")
+                        if await self.fanout.resolve(payload, client_kind):
+                            continue
+                        if payload.get("method") in {"turn/start", "turn/steer"}:
+                            thread_id = (payload.get("params") or {}).get("threadId")
+                            if thread_id:
+                                self._thread_origins[thread_id] = client_kind
+                        await upstream.send_json(payload)
+                except Exception:
+                    logger.exception(
+                        "proxy downstream->upstream failed: client=%s type=%s method=%s id=%r",
+                        client_kind,
+                        message_type,
+                        method,
+                        request_id,
+                    )
+                    raise
             async def upstream_to_downstream() -> None:
-                async for message in upstream:
-                    if message.type != WSMsgType.TEXT:
-                        continue
-                    payload = json.loads(message.data)
-                    if payload.get("method") in APPROVAL_METHODS and "id" in payload:
-                        await self.fanout.publish(payload, upstream)
-                    else:
-                        await self._observe_notification(payload, client_kind)
-                        if not downstream.closed:
-                            await downstream.send_json(payload)
-
+                message_type = None
+                method = None
+                request_id = None
+                try:
+                    async for message in upstream:
+                        message_type = message.type
+                        if message.type != WSMsgType.TEXT:
+                            continue
+                        payload = json.loads(message.data)
+                        if isinstance(payload, dict):
+                            method = payload.get("method")
+                            request_id = payload.get("id")
+                        if payload.get("method") in APPROVAL_METHODS and "id" in payload:
+                            await self.fanout.publish(payload, upstream)
+                        else:
+                            await self._observe_notification(payload, client_kind)
+                            if not downstream.closed:
+                                await downstream.send_json(payload)
+                except Exception:
+                    logger.exception(
+                        "proxy upstream->downstream failed: client=%s type=%s method=%s id=%r",
+                        client_kind,
+                        message_type,
+                        method,
+                        request_id,
+                    )
+                    raise
             tasks = [
                 asyncio.create_task(downstream_to_upstream()),
                 asyncio.create_task(upstream_to_downstream()),

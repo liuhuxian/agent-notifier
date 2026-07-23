@@ -59,6 +59,16 @@ class RegistryTest(unittest.TestCase):
             self.assertIsNone(registry.find_by_thread("thread-old"))
             registry.close()
 
+    def test_routes_can_be_filtered_by_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = SessionRegistry(Path(tmp) / "state.sqlite3")
+            registry.bind("cc_connect", "one", "feishu:one", "thread-1", "/one")
+            registry.bind("cc_connect", "two", "feishu:two", "thread-2", "/two")
+            routes = registry.list_routes("cc_connect", "one")
+            self.assertEqual(["feishu:one"], [route.external_key for route in routes])
+            self.assertEqual(2, len(registry.list_routes("cc_connect")))
+            registry.close()
+
 
 class ApprovalStoreTest(unittest.TestCase):
     def test_first_resolution_wins(self):

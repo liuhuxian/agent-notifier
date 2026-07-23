@@ -64,7 +64,8 @@ if [[ "$NO_SERVICE" == false ]] && command -v systemctl >/dev/null 2>&1 && syste
     -e "s|@SERVICE_PATH@|$ESCAPED_SERVICE_PATH|g" \
     "$ROOT/systemd/agent-notifier.service" > "$UNIT_HOME/agent-notifier.service"
   systemctl --user daemon-reload
-  systemctl --user enable --now agent-notifier.service
+  systemctl --user enable agent-notifier.service
+  systemctl --user restart agent-notifier.service
   SERVICE_READY=false
   for _ in $(seq 1 200); do
     if "$BIN" status 2>/dev/null | grep -q '^status: running$'; then
@@ -79,7 +80,7 @@ if [[ "$NO_SERVICE" == false ]] && command -v systemctl >/dev/null 2>&1 && syste
     echo "Inspect logs with: journalctl --user -u agent-notifier.service -n 100" >&2
     exit 1
   fi
-  echo "Installed and started user service: agent-notifier.service"
+  echo "Installed and restarted user service: agent-notifier.service"
 elif [[ "$NO_SERVICE" == false ]]; then
   echo "systemd user service unavailable; agent-notifier will auto-start a background process."
 else

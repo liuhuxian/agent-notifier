@@ -86,6 +86,8 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(task, 1)
         self.assertEqual([{"kind": "text", "text": "hi"}], output)
         self.assertEqual("end_turn", result["stopReason"])
+        turn_start = next(params for method, params in self.rpc.calls if method == "turn/start")
+        self.assertNotIn("responsesapiClientMetadata", turn_start)
 
     async def test_active_turn_uses_steer(self):
         self.backend.active_turns["thread-1"] = "turn-active"
@@ -98,6 +100,7 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.sleep(0)
         self.assertEqual("turn/steer", self.rpc.calls[-1][0])
+        self.assertNotIn("responsesapiClientMetadata", self.rpc.calls[-1][1])
         await self.rpc.events.put(
             {
                 "method": "turn/completed",
@@ -108,6 +111,30 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         await asyncio.wait_for(task, 1)
+
+    async def test_failed_turn_surfaces_codex_error(self):
+        async def emit(_event):
+            pass
+
+        task = asyncio.create_task(
+            self.backend.prompt("thread-1", "hello", "cc_connect", emit)
+        )
+        await asyncio.sleep(0)
+        await self.rpc.events.put(
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-new",
+                        "status": "failed",
+                        "error": {"message": "workspace is out of credits"},
+                    },
+                },
+            }
+        )
+        with self.assertRaisesRegex(RuntimeError, "workspace is out of credits"):
+            await asyncio.wait_for(task, 1)
 
 
 if __name__ == "__main__":

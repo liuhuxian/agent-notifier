@@ -47,8 +47,9 @@ agent-notifier doctor
 - 普通 `codex` 命令完全不受影响。
 - `agent-notifier codex` 打开完整的原生 Codex TUI。
 - cc-connect 通过官方 `type = "acp"` 接入，不修改 cc-connect 源码或二进制。
-- cc-connect session ID 直接保存 Codex thread ID，因此 `/list`、`/switch` 和恢复
-  会话仍由 cc-connect 管理。
+- cc-connect 创建或加载的 ACP session 会保存对应的 Codex thread ID。
+- 纯终端启动或恢复的 Codex thread 不会自动出现在 cc-connect 的 `/list` 中；
+  Agent Notifier 会单独维护终端 thread 的飞书通知路由。
 - 活动 turn 收到飞书消息时使用 `turn/steer`，不会并发启动另一个竞争 turn。
 - 权限请求同时发送到终端和飞书，第一份有效响应生效，晚到响应被忽略。
 - 飞书发起的 turn 直接收到正常回复，不再额外发送重复的“完成”通知。
@@ -159,6 +160,19 @@ agent-notifier codex resume <THREAD_ID>
 agent-notifier codex -C /path/to/project
 ```
 
+恢复已有 thread 时，如果注册表中只有一个飞书路由，Agent Notifier 会自动将
+该 thread 绑定到该路由。存在多个飞书路由时必须指定项目，避免误发通知：
+
+```bash
+agent-notifier codex --notify-project le-wm-codex resume <THREAD_ID>
+```
+
+也可以只更新绑定而不启动 TUI：
+
+```bash
+agent-notifier bind <THREAD_ID> --project le-wm-codex
+```
+
 运维命令：
 
 ```bash
@@ -176,6 +190,10 @@ systemctl --user restart agent-notifier
 /switch <id>
 /current
 ```
+
+这些命令只管理 cc-connect 自己创建或加载的 ACP session，不会列出所有 Codex
+历史 thread。终端恢复的 thread 应通过上述自动绑定或 `agent-notifier bind`
+关联飞书通知路由。
 
 ## 卸载
 

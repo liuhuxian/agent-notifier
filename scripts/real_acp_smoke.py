@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Exercise the exact ACP calls used by cc-connect 1.3.2."""
 
+import argparse
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -28,11 +30,21 @@ def request(process: subprocess.Popen, request_id: int, method: str, params: dic
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--prompt",
+        action="store_true",
+        help="Also exercise session/prompt and the underlying Codex turn/start call.",
+    )
+    args = parser.parse_args()
+
+    state_home = tempfile.TemporaryDirectory(prefix="agent-notifier-smoke-state-")
     env = os.environ.copy()
     env.update(
         {
             "CC_PROJECT": "agent-notifier-smoke",
             "CC_SESSION_KEY": "smoke:local",
+            "XDG_STATE_HOME": state_home.name,
         }
     )
     process = subprocess.Popen(
@@ -70,12 +82,33 @@ def main() -> None:
         if not thread_id:
             raise RuntimeError("session/new returned no sessionId")
         print(f"Real cc-connect 1.3.2 ACP initialize + session/new: PASS ({thread_id})")
+        if args.prompt:
+            prompt_result = request(
+                process,
+                3,
+                "session/prompt",
+                {
+                    "sessionId": thread_id,
+                    "prompt": [
+                        {
+                            "type": "text",
+                            "text": "Reply exactly: agent notifier prompt smoke",
+                        }
+                    ],
+                },
+            )
+            if prompt_result.get("stopReason") != "end_turn":
+                raise RuntimeError(
+                    f"session/prompt did not complete: {prompt_result}"
+                )
+            print("Real ACP session/prompt + Codex turn/start: PASS")
     finally:
         process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+        state_home.cleanup()
 
 
 if __name__ == "__main__":

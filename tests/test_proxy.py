@@ -31,6 +31,15 @@ class FakeUpstream:
             payload = json.loads(message.data)
             if "id" not in payload:
                 continue
+            if payload["method"] == "test/large":
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {"blob": "x" * (4 * 1024 * 1024 + 1)},
+                    }
+                )
+                continue
             await ws.send_json(
                 {"jsonrpc": "2.0", "id": payload["id"], "result": {"method": payload["method"]}}
             )
@@ -105,6 +114,22 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         response = await ws.receive_json()
         self.assertEqual(7, response["id"])
         self.assertEqual("thread/read", response["result"]["method"])
+        await ws.close()
+
+    async def test_native_tui_rpc_path_preserves_request(self):
+        ws = await self.session.ws_connect("http://localhost/rpc")
+        await ws.send_json({"jsonrpc": "2.0", "id": 8, "method": "thread/read", "params": {}})
+        response = await ws.receive_json()
+        self.assertEqual(8, response["id"])
+        self.assertEqual("thread/read", response["result"]["method"])
+        await ws.close()
+
+    async def test_large_resume_response_is_preserved(self):
+        ws = await self.session.ws_connect("http://localhost/rpc", max_msg_size=0)
+        await ws.send_json({"jsonrpc": "2.0", "id": 9, "method": "test/large", "params": {}})
+        response = await ws.receive_json()
+        self.assertEqual(9, response["id"])
+        self.assertEqual(4 * 1024 * 1024 + 1, len(response["result"]["blob"]))
         await ws.close()
 
     async def test_codex_client_initializes_through_proxy(self):

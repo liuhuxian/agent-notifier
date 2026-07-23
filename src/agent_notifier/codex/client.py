@@ -37,7 +37,9 @@ class CodexAppServerClient:
         self._session = ClientSession(connector=connector)
         try:
             self._ws = await self._session.ws_connect(
-                f"http://localhost/?client={self.client_name}", heartbeat=30
+                f"http://localhost/?client={self.client_name}",
+                heartbeat=30,
+                max_msg_size=0,
             )
         except Exception:
             await self._session.close()

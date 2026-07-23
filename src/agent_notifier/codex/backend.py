@@ -80,7 +80,6 @@ class CodexBackend:
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers[thread_id].append(queue)
         input_items = [{"type": "text", "text": text, "text_elements": []}]
-        metadata = {"agent_notifier_origin": origin}
         try:
             active_turn = self.active_turns.get(thread_id)
             if active_turn:
@@ -90,7 +89,6 @@ class CodexBackend:
                         "threadId": thread_id,
                         "expectedTurnId": active_turn,
                         "input": input_items,
-                        "responsesapiClientMetadata": metadata,
                     },
                 )
                 turn_id = result["turnId"]
@@ -100,7 +98,6 @@ class CodexBackend:
                     {
                         "threadId": thread_id,
                         "input": input_items,
-                        "responsesapiClientMetadata": metadata,
                     },
                 )
                 turn_id = result["turn"]["id"]
@@ -120,9 +117,13 @@ class CodexBackend:
                     if turn.get("id") != turn_id:
                         continue
                     status = turn.get("status")
-                    return {
-                        "stopReason": "end_turn" if status == "completed" else "cancelled"
-                    }
+                    if status == "completed":
+                        return {"stopReason": "end_turn"}
+                    error = turn.get("error") or {}
+                    message = error.get("message")
+                    if message:
+                        raise RuntimeError(message)
+                    return {"stopReason": "cancelled"}
         finally:
             self._subscribers[thread_id].remove(queue)
             if not self._subscribers[thread_id]:

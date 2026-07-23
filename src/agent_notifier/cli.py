@@ -29,6 +29,47 @@ from .versioning import (
 )
 
 
+def _resume_thread_id(codex_args: list[str]) -> str | None:
+    try:
+        index = codex_args.index("resume")
+    except ValueError:
+        return None
+    if index + 1 >= len(codex_args):
+        return None
+    candidate = codex_args[index + 1]
+    return candidate if candidate and not candidate.startswith("-") else None
+
+
+def bind_terminal_thread(
+    paths: Paths,
+    thread_id: str,
+    project: str | None = None,
+    cwd: str | None = None,
+):
+    registry = SessionRegistry(paths.state_db)
+    try:
+        routes = registry.list_routes("cc_connect", project)
+        scope = f"project {project!r}" if project else "all configured projects"
+        if not routes:
+            raise ValueError(f"no Feishu route is registered for {scope}")
+        if len(routes) > 1:
+            projects = ", ".join(sorted({route.project for route in routes}))
+            raise ValueError(
+                f"multiple Feishu routes are registered for {scope} "
+                f"(projects: {projects}); specify --notify-project"
+            )
+        route = routes[0]
+        return registry.bind(
+            route.adapter,
+            route.project,
+            route.external_key,
+            thread_id,
+            cwd or route.cwd,
+        )
+    finally:
+        registry.close()
+
+
 def _run_version(command: list[str]) -> str:
     result = subprocess.run(command, capture_output=True, text=True, timeout=10)
     if result.returncode:
@@ -198,7 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("acp", help="run the cc-connect ACP stdio adapter")
     codex = sub.add_parser("codex", help="launch native Codex TUI through the service")
+    codex.add_argument(
+        "--notify-project",
+        help="Feishu project to bind when resuming a Codex thread",
+    )
     codex.add_argument("codex_args", nargs=argparse.REMAINDER)
+    bind = sub.add_parser(
+        "bind", help="bind an existing Codex thread to a Feishu project"
+    )
+    bind.add_argument("thread_id")
+    bind.add_argument("--project", required=True)
     sub.add_parser("status", help="show service status")
     sub.add_parser("doctor", help="validate versions, paths, and service")
     logs = sub.add_parser("logs", help="follow service logs")
@@ -232,10 +282,36 @@ def main() -> None:
         elif args.command == "codex":
             check_versions(require_cc=False)
             ensure_service(paths)
+            thread_id = _resume_thread_id(args.codex_args)
+            if args.notify_project and thread_id is None:
+                raise ValueError(
+                    "--notify-project requires `agent-notifier codex "
+                    "[--notify-project PROJECT] resume THREAD_ID`"
+                )
+            if thread_id:
+                mapping = bind_terminal_thread(
+                    paths,
+                    thread_id,
+                    project=args.notify_project,
+                    cwd=os.getcwd(),
+                )
+                print(
+                    f"Feishu notifications: {mapping.project} "
+                    f"<- {mapping.thread_id}",
+                    file=sys.stderr,
+                )
             os.execvp(
                 "codex",
                 ["codex", "--remote", f"unix://{paths.proxy_socket}", *args.codex_args],
             )
+        elif args.command == "bind":
+            mapping = bind_terminal_thread(
+                paths,
+                args.thread_id,
+                project=args.project,
+                cwd=os.getcwd(),
+            )
+            print(f"bound: {mapping.project} <- {mapping.thread_id}")
         elif args.command == "status":
             running = _socket_ready(paths.proxy_socket)
             pid = paths.pid_file.read_text().strip() if paths.pid_file.exists() else "-"
