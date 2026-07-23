@@ -60,6 +60,8 @@ agent-notifier doctor
   `turn/*`、`item/*` 和工具执行进度；普通 JSON-RPC 响应仍只返回原请求方。
 - 飞书发起的 turn 由 Agent Notifier 直接投递最终回复；ACP 只返回回合完成
   状态，不再经 cc-connect 重复回传同一段文本。
+- 飞书来源的中间进度在每个完整 commentary 消息结束后投递一次，不发送
+  token 级碎片，并按 thread/turn/item 去重。
 
 ## 安装
 

@@ -563,6 +563,7 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_completion_uses_exactly_one_callback_for_each_origin(self):
         terminal_notifications = []
         remote_notifications = []
+        remote_progress = []
 
         async def notify_terminal(thread_id, text):
             terminal_notifications.append((thread_id, text))
@@ -570,8 +571,12 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         async def notify_remote(thread_id, text):
             remote_notifications.append((thread_id, text))
 
+        async def notify_progress(thread_id, text):
+            remote_progress.append((thread_id, text))
+
         self.proxy.on_terminal_completion = notify_terminal
         self.proxy.on_remote_completion = notify_remote
+        self.proxy.on_remote_progress = notify_progress
         self.proxy._thread_origins["thread-terminal"] = "terminal"
         await self.proxy._observe_notification(
             {
@@ -594,6 +599,21 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         await self.proxy._observe_notification(completed)
 
         self.proxy._thread_origins["thread-cc"] = "cc_connect"
+        commentary = {
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-cc",
+                "turnId": "turn-2",
+                "item": {
+                    "id": "commentary-2",
+                    "type": "agentMessage",
+                    "text": "remote progress",
+                    "phase": "commentary",
+                },
+            },
+        }
+        await self.proxy._observe_notification(commentary)
+        await self.proxy._observe_notification(commentary)
         await self.proxy._observe_notification(
             {
                 "method": "item/completed",
@@ -623,6 +643,9 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [("thread-cc", "remote result")], remote_notifications
+        )
+        self.assertEqual(
+            [("thread-cc", "remote progress")], remote_progress
         )
 
     async def test_terminal_completion_uses_only_last_final_answer(self):

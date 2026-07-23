@@ -235,6 +235,7 @@ class AppServerProxy:
         upstream_socket: Path,
         on_terminal_completion: Callable[[str, str], Awaitable[None]] | None = None,
         on_remote_completion: Callable[[str, str], Awaitable[None]] | None = None,
+        on_remote_progress: Callable[[str, str], Awaitable[None]] | None = None,
         approval_store: ApprovalStore | None = None,
         on_approval_request: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
@@ -245,11 +246,13 @@ class AppServerProxy:
         self.runner: web.AppRunner | None = None
         self.on_terminal_completion = on_terminal_completion
         self.on_remote_completion = on_remote_completion
+        self.on_remote_progress = on_remote_progress
         self.on_approval_request = on_approval_request
         self._thread_origins: dict[str, str] = {}
         self._turn_text: dict[tuple[str, str], list[str]] = {}
         self._turn_last_message: dict[tuple[str, str], str] = {}
         self._turn_final_text: dict[tuple[str, str], str] = {}
+        self._remote_progress_items: dict[tuple[str, str], set[str]] = {}
         self._completed_turns: set[str] = set()
         self._completed_order: deque[str] = deque()
         self._completed_limit = 10_000
@@ -442,8 +445,28 @@ class AppServerProxy:
             key = (thread_id, turn_id)
             text = item.get("text", "")
             self._turn_last_message[key] = text
-            if item.get("phase") == "final_answer":
+            phase = item.get("phase")
+            if phase == "final_answer":
                 self._turn_final_text[key] = text
+            elif (
+                phase == "commentary"
+                and origin == "cc_connect"
+                and text
+                and self.on_remote_progress
+            ):
+                item_id = str(item.get("id") or "")
+                sent = self._remote_progress_items.setdefault(key, set())
+                if item_id not in sent:
+                    sent.add(item_id)
+                    try:
+                        await self.on_remote_progress(thread_id, text)
+                    except Exception:
+                        logger.exception(
+                            "failed to send remote progress: thread=%s turn=%s item=%s",
+                            thread_id,
+                            turn_id,
+                            item_id,
+                        )
             return
         if method != "turn/completed" or not thread_id:
             return
@@ -459,6 +482,7 @@ class AppServerProxy:
         delta_text = "".join(self._turn_text.pop(key, []))
         last_message = self._turn_last_message.pop(key, None)
         final_text = self._turn_final_text.pop(key, None)
+        self._remote_progress_items.pop(key, None)
         text = final_text if final_text is not None else (
             last_message if last_message is not None else delta_text
         )
