@@ -21,6 +21,7 @@ from .acp.server import ACPStdioServer
 from .cc_config import configure_project
 from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
+from .codex.sessions import discover_rollout_thread_ids
 from .config import Paths
 from .feishu import reply_approval_result_card
 from .hook_config import decode_command, default_hooks_path, gate_hooks
@@ -133,6 +134,12 @@ def list_agent_sessions(
     adapter = _agent_adapter(provider)
     registry = SessionRegistry(paths.state_db)
     try:
+        registry.prune_missing_threads(
+            adapter,
+            discover_rollout_thread_ids(),
+            project=project,
+            external_key=external_key,
+        )
         subscriptions = registry.list_subscriptions(
             adapter, project=project, external_key=external_key
         )

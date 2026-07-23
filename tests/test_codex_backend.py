@@ -62,12 +62,57 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
             self.registry.find_by_thread("thread-old").external_key,
         )
 
+    async def test_resume_thread_prefers_manually_selected_route(self):
+        self.registry.bind(
+            "cc_connect",
+            "le-wm",
+            "feishu:one",
+            "thread-selected",
+            "/workspace",
+        )
+
+        thread_id = await self.backend.resume_thread(
+            "thread-stale", "/workspace", "le-wm", "feishu:one"
+        )
+
+        self.assertEqual("thread-selected", thread_id)
+        self.assertIn(
+            ("thread/resume", {
+                "threadId": "thread-selected",
+                "cwd": "/workspace",
+            }),
+            self.rpc.calls,
+        )
+        mapping = self.registry.get("cc_connect", "le-wm", "feishu:one")
+        self.assertEqual("thread-selected", mapping.thread_id)
+
+    async def test_start_thread_does_not_replace_manually_selected_route(self):
+        self.registry.bind(
+            "cc_connect",
+            "le-wm",
+            "feishu:one",
+            "thread-selected",
+            "/workspace",
+        )
+
+        thread_id = await self.backend.start_thread(
+            "/workspace", "le-wm", "feishu:one"
+        )
+
+        self.assertEqual("thread-new", thread_id)
+        mapping = self.registry.get("cc_connect", "le-wm", "feishu:one")
+        self.assertEqual("thread-selected", mapping.thread_id)
+        subscriptions = self.registry.list_subscriptions(
+            "cc_connect", "le-wm", "feishu:one"
+        )
+        self.assertIn("thread-new", {route.thread_id for route in subscriptions})
+
     async def test_switching_active_session_keeps_previous_thread_notifications(self):
         await self.backend.resume_thread(
             "thread-old", "/workspace", "le-wm", "feishu:one"
         )
-        await self.backend.resume_thread(
-            "thread-new", "/workspace", "le-wm", "feishu:one"
+        self.registry.bind(
+            "cc_connect", "le-wm", "feishu:one", "thread-new", "/workspace"
         )
 
         active = self.registry.get("cc_connect", "le-wm", "feishu:one")

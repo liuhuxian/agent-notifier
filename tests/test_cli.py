@@ -200,8 +200,20 @@ class CodexBindingTest(unittest.TestCase):
 
     def test_agent_list_current_and_short_id_switch_are_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:
-            paths = make_paths(Path(tmp))
+            root = Path(tmp)
+            paths = make_paths(root)
             paths.ensure_directories()
+            codex_home = root / "codex"
+            sessions_dir = codex_home / "sessions/2026/07/23"
+            sessions_dir.mkdir(parents=True)
+            for thread_id in (
+                "019f8dfd-130a-7a92-a115-f437e38e40a8",
+                "019e81c0-c415-7820-8921-2b32f1bee990",
+            ):
+                (
+                    sessions_dir
+                    / f"rollout-2026-07-23T10-00-00-{thread_id}.jsonl"
+                ).write_text("{}\n")
             registry = SessionRegistry(paths.state_db)
             registry.bind(
                 "cc_connect",
@@ -226,12 +238,13 @@ class CodexBindingTest(unittest.TestCase):
             )
             registry.close()
 
-            listed = list_agent_sessions(
-                paths,
-                "codex",
-                project="le-wm-codex",
-                external_key="feishu:one",
-            )
+            with patch.dict("os.environ", {"CODEX_HOME": str(codex_home)}):
+                listed = list_agent_sessions(
+                    paths,
+                    "codex",
+                    project="le-wm-codex",
+                    external_key="feishu:one",
+                )
             self.assertIn("Codex 会话（2）", listed)
             self.assertIn("[当前] 019f8dfd", listed)
             self.assertIn("[可用] 019e81c0", listed)
@@ -296,6 +309,64 @@ class CodexBindingTest(unittest.TestCase):
                     project="le-wm",
                     external_key="feishu:one",
                 )
+
+    def test_agent_list_prunes_routes_for_deleted_codex_rollouts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = make_paths(root)
+            paths.ensure_directories()
+            codex_home = root / "codex"
+            sessions_dir = codex_home / "sessions/2026/07/23"
+            sessions_dir.mkdir(parents=True)
+            kept_thread = "019e81c0-c415-7820-8921-2b32f1bee990"
+            stale_thread = "019f8dfd-130a-7a92-a115-f437e38e40a8"
+            (
+                sessions_dir
+                / f"rollout-2026-07-23T10-00-00-{kept_thread}.jsonl"
+            ).write_text("{}\n")
+
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                stale_thread,
+                "/workspace/stale",
+            )
+            registry.subscribe(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                kept_thread,
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            with patch.dict("os.environ", {"CODEX_HOME": str(codex_home)}):
+                listed = list_agent_sessions(
+                    paths,
+                    "codex",
+                    project="le-wm-codex",
+                    external_key="feishu:one",
+                )
+
+            self.assertIn("Codex 会话（1）", listed)
+            self.assertIn("[可用] 019e81c0", listed)
+            self.assertNotIn("019f8dfd", listed)
+            registry = SessionRegistry(paths.state_db)
+            self.assertIsNone(
+                registry.get("cc_connect", "le-wm-codex", "feishu:one")
+            )
+            self.assertEqual(
+                [kept_thread],
+                [
+                    route.thread_id
+                    for route in registry.list_subscriptions(
+                        "cc_connect", "le-wm-codex", "feishu:one"
+                    )
+                ],
+            )
+            registry.close()
 
 
 class ApprovalReplyTest(unittest.IsolatedAsyncioTestCase):

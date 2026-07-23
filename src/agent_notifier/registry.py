@@ -232,6 +232,65 @@ class SessionRegistry:
                 ).fetchall()
         return [SessionMapping(*row) for row in rows]
 
+    def prune_missing_threads(
+        self,
+        adapter: str,
+        valid_thread_ids: set[str],
+        project: str | None = None,
+        external_key: str | None = None,
+    ) -> tuple[int, int]:
+        clauses = ["adapter = ?"]
+        values: list[str] = [adapter]
+        if project is not None:
+            clauses.append("project = ?")
+            values.append(project)
+        if external_key is not None:
+            clauses.append("external_key = ?")
+            values.append(external_key)
+        where = " AND ".join(clauses)
+
+        with self._lock, self._conn:
+            subscriptions = self._conn.execute(
+                f"""
+                SELECT adapter, project, external_key, thread_id
+                FROM notification_subscriptions
+                WHERE {where}
+                """,
+                values,
+            ).fetchall()
+            mappings = self._conn.execute(
+                f"""
+                SELECT adapter, project, external_key, thread_id
+                FROM session_mappings
+                WHERE {where}
+                """,
+                values,
+            ).fetchall()
+
+            stale_subscriptions = [
+                row for row in subscriptions if row[3] not in valid_thread_ids
+            ]
+            stale_mappings = [
+                row for row in mappings if row[3] not in valid_thread_ids
+            ]
+            self._conn.executemany(
+                """
+                DELETE FROM notification_subscriptions
+                WHERE adapter = ? AND project = ? AND external_key = ?
+                  AND thread_id = ?
+                """,
+                stale_subscriptions,
+            )
+            self._conn.executemany(
+                """
+                DELETE FROM session_mappings
+                WHERE adapter = ? AND project = ? AND external_key = ?
+                  AND thread_id = ?
+                """,
+                stale_mappings,
+            )
+        return len(stale_subscriptions), len(stale_mappings)
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

@@ -27,6 +27,23 @@ class CodexBackend:
         if self._dispatcher is None:
             self._dispatcher = asyncio.create_task(self._dispatch_events())
 
+    def _register_transport_thread(
+        self,
+        project: str,
+        external_key: str,
+        thread_id: str,
+        cwd: str,
+    ) -> None:
+        active = self.registry.get("cc_connect", project, external_key)
+        if active is None:
+            self.registry.bind(
+                "cc_connect", project, external_key, thread_id, cwd
+            )
+        else:
+            self.registry.subscribe(
+                "cc_connect", project, external_key, thread_id, cwd
+            )
+
     async def _dispatch_events(self) -> None:
         while True:
             event = await self.rpc.next_event()
@@ -53,20 +70,30 @@ class CodexBackend:
             },
         )
         thread_id = result["thread"]["id"]
-        self.registry.bind(
-            "cc_connect", project, external_key, thread_id, cwd
+        self._register_transport_thread(
+            project, external_key, thread_id, cwd
         )
         return thread_id
 
     async def resume_thread(
         self, thread_id: str, cwd: str, project: str, external_key: str
     ) -> str:
+        target_thread_id = self.resolve_active_thread(
+            project, external_key, thread_id
+        )
         result = await self.rpc.call(
             "thread/resume",
-            {"threadId": thread_id, "cwd": cwd},
+            {"threadId": target_thread_id, "cwd": cwd},
         )
         resumed_id = result["thread"]["id"]
-        self.registry.bind("cc_connect", project, external_key, resumed_id, cwd)
+        if resumed_id != target_thread_id:
+            self.registry.bind(
+                "cc_connect", project, external_key, resumed_id, cwd
+            )
+        else:
+            self._register_transport_thread(
+                project, external_key, resumed_id, cwd
+            )
         return resumed_id
 
     def resolve_active_thread(
