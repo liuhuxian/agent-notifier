@@ -109,6 +109,52 @@ class ApprovalStoreTest(unittest.TestCase):
                 store.resolve("approval-1", "deny", "cc_connect")
             store.close()
 
+    def test_feishu_message_id_is_persisted_and_found_by_short_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "state.sqlite3"
+            store = ApprovalStore(db)
+            store.register(
+                "agent-notifier-approval:1234567890abcdef",
+                "thread-1",
+                "command",
+                {"command": "date"},
+            )
+            store.set_feishu_message_id(
+                "agent-notifier-approval:1234567890abcdef", "om_message"
+            )
+            record = store.find_by_prefix("1234567890")
+            self.assertEqual("thread-1", record.thread_id)
+            self.assertEqual("om_message", record.feishu_message_id)
+            store.close()
+
+    def test_existing_approval_table_is_migrated_for_feishu_message_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "state.sqlite3"
+            connection = __import__("sqlite3").connect(db)
+            connection.execute(
+                """
+                CREATE TABLE approvals (
+                    approval_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    decision TEXT,
+                    resolved_by TEXT,
+                    resolved_at TEXT
+                )
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            store = ApprovalStore(db)
+            columns = {
+                row[1]
+                for row in store._conn.execute("PRAGMA table_info(approvals)")
+            }
+            self.assertIn("feishu_message_id", columns)
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -177,7 +177,7 @@ class SharedService:
         reason, operation = approval_details(request)
         receive_id = mapping.external_key.rsplit(":", 1)[-1]
         try:
-            await send_approval_card(
+            message_id = await send_approval_card(
                 project=mapping.project,
                 receive_id=receive_id,
                 session_key=mapping.external_key,
@@ -185,6 +185,8 @@ class SharedService:
                 reason=reason,
                 operation=operation,
             )
+            if message_id and self.approval_store:
+                self.approval_store.set_feishu_message_id(token, message_id)
         except Exception:
             logger.exception(
                 "Feishu approval card failed; falling back to text: approval=%s",

@@ -90,6 +90,38 @@ def build_approval_card(
     }
 
 
+def build_approval_result_card(
+    approval_id: str,
+    decision: str,
+    status: str,
+) -> dict[str, Any]:
+    if status == "already_resolved":
+        template = "orange"
+        title = "审批已经处理"
+        detail = "该权限请求已在其他终端处理，本次操作未改变审批结果。"
+    elif decision == "allow":
+        template = "green"
+        title = "已允许 Codex 权限请求"
+        detail = "Codex 已继续执行本次操作。"
+    else:
+        template = "red"
+        title = "已拒绝 Codex 权限请求"
+        detail = "Codex 已取消本次操作。"
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": title},
+        },
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": f"**请求 ID**：`{approval_id}`\n{detail}",
+            }
+        ],
+    }
+
+
 async def _post_json(
     session: ClientSession,
     url: str,
@@ -137,6 +169,37 @@ async def send_approval_card(
             "?receive_id_type=open_id",
             {
                 "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            token,
+        )
+        return str(result.get("data", {}).get("message_id", ""))
+
+
+async def reply_approval_result_card(
+    project: str,
+    message_id: str,
+    approval_id: str,
+    decision: str,
+    status: str,
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> str:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        auth = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/auth/v3/tenant_access_token/internal",
+            {"app_id": settings["app_id"], "app_secret": settings["app_secret"]},
+        )
+        token = auth.get("tenant_access_token")
+        if not token:
+            raise RuntimeError("Feishu API did not return tenant_access_token")
+        card = build_approval_result_card(approval_id, decision, status)
+        result = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages/{message_id}/reply",
+            {
                 "msg_type": "interactive",
                 "content": json.dumps(card, ensure_ascii=False),
             },

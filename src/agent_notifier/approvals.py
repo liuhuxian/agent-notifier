@@ -20,6 +20,13 @@ class ApprovalResolution:
     resolved_by: str
 
 
+@dataclass(frozen=True)
+class ApprovalRecord:
+    approval_id: str
+    thread_id: str
+    feishu_message_id: str | None
+
+
 class ApprovalStore:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +46,13 @@ class ApprovalStore:
             )
             """
         )
+        columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(approvals)")
+        }
+        if "feishu_message_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE approvals ADD COLUMN feishu_message_id TEXT"
+            )
         self._conn.commit()
 
     def register(self, approval_id: str, thread_id: str, kind: str, payload: dict) -> None:
@@ -79,6 +93,39 @@ class ApprovalStore:
                 (approval_id,),
             ).fetchone()
         return ApprovalResolution(*row) if row else None
+
+    def set_feishu_message_id(
+        self, approval_id: str, feishu_message_id: str
+    ) -> None:
+        with self._lock, self._conn:
+            cursor = self._conn.execute(
+                """
+                UPDATE approvals
+                SET feishu_message_id = ?
+                WHERE approval_id = ?
+                """,
+                (feishu_message_id, approval_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(approval_id)
+
+    def find_by_prefix(self, approval_id: str) -> ApprovalRecord | None:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT approval_id, thread_id, feishu_message_id
+                FROM approvals
+                WHERE approval_id = ?
+                   OR approval_id LIKE ?
+                ORDER BY rowid DESC
+                """,
+                (approval_id, f"agent-notifier-approval:{approval_id}%"),
+            ).fetchall()
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ValueError(f"ambiguous approval id: {approval_id}")
+        return ApprovalRecord(*rows[0])
 
     def close(self) -> None:
         with self._lock:

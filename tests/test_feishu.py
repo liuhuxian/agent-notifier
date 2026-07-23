@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_notifier.feishu import build_approval_card, load_feishu_settings
+from agent_notifier.feishu import (
+    build_approval_card,
+    build_approval_result_card,
+    load_feishu_settings,
+)
 
 
 class FeishuCardTest(unittest.TestCase):
@@ -43,6 +47,20 @@ app_secret = "secret"
         self.assertEqual("app", settings["app_id"])
         self.assertEqual("secret", settings["app_secret"])
         self.assertEqual("https://open.feishu.cn", settings["domain"])
+
+    def test_approval_result_cards_use_status_header_colors(self):
+        allowed = build_approval_result_card("1234567890", "allow", "resolved")
+        denied = build_approval_result_card("1234567890", "deny", "resolved")
+        handled = build_approval_result_card(
+            "1234567890", "allow", "already_resolved"
+        )
+
+        self.assertEqual("green", allowed["header"]["template"])
+        self.assertEqual("red", denied["header"]["template"])
+        self.assertEqual("orange", handled["header"]["template"])
+        self.assertIn("已允许", allowed["header"]["title"]["content"])
+        self.assertIn("已拒绝", denied["header"]["title"]["content"])
+        self.assertIn("已经处理", handled["header"]["title"]["content"])
 
 
 if __name__ == "__main__":

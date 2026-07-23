@@ -15,11 +15,13 @@ from pathlib import Path
 
 from aiohttp import ClientSession, UnixConnector
 
+from .approvals import ApprovalStore
 from .acp.server import ACPStdioServer
 from .cc_config import configure_project
 from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
 from .config import Paths
+from .feishu import reply_approval_result_card
 from .hook_config import decode_command, default_hooks_path, gate_hooks
 from .registry import SessionRegistry
 from .service import SharedService
@@ -118,19 +120,52 @@ async def decide_approval(paths: Paths, decision: str, approval_id: str) -> str:
             payload = await response.json()
             if response.status >= 400:
                 raise ValueError(payload.get("error") or "approval decision failed")
-            return str(payload.get("status") or "resolved")
+            status = str(payload.get("status") or "resolved")
+    await reply_approval_decision(paths, decision, approval_id, status)
+    return status
+
+
+async def reply_approval_decision(
+    paths: Paths,
+    decision: str,
+    approval_id: str,
+    status: str,
+) -> None:
+    store = ApprovalStore(paths.state_db)
+    try:
+        record = store.find_by_prefix(approval_id)
+    finally:
+        store.close()
+    if record is None:
+        raise ValueError(f"approval record not found: {approval_id}")
+    if not record.feishu_message_id:
+        raise ValueError(f"approval has no Feishu message id: {approval_id}")
+    registry = SessionRegistry(paths.state_db)
+    try:
+        mapping = registry.find_by_thread(record.thread_id)
+    finally:
+        registry.close()
+    if mapping is None:
+        raise ValueError(f"approval thread has no Feishu route: {record.thread_id}")
+    await reply_approval_result_card(
+        project=mapping.project,
+        message_id=record.feishu_message_id,
+        approval_id=approval_id,
+        decision=decision,
+        status=status,
+    )
 
 
 def approval_decision_message(
     status: str, decision: str, approval_id: str, quiet: bool
 ) -> str | None:
+    if quiet:
+        return None
     if status == "already_resolved":
         return (
             "<text_tag color='orange'>**⚠️ 审批已经被其他端处理**</text_tag>\n\n"
             f"请求 ID：`{approval_id}`"
         )
-    if quiet:
-        return None
     if decision == "allow":
         return (
             "<text_tag color='green'>**✅ 已允许 Codex 权限请求**</text_tag>\n\n"

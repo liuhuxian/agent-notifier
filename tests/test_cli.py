@@ -1,13 +1,16 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+from agent_notifier.approvals import ApprovalStore
 from agent_notifier.cli import (
     _resume_thread_id,
     activate_terminal_thread,
     approval_decision_message,
     bind_terminal_thread,
     build_parser,
+    reply_approval_decision,
 )
 from agent_notifier.config import Paths
 from agent_notifier.registry import SessionRegistry
@@ -60,8 +63,7 @@ class CodexBindingTest(unittest.TestCase):
         message = approval_decision_message(
             "already_resolved", "allow", "1234567890", quiet=True
         )
-        self.assertIn("审批已经被其他端处理", message)
-        self.assertIn("`1234567890`", message)
+        self.assertIsNone(message)
 
     def test_quiet_card_callback_suppresses_normal_success(self):
         self.assertIsNone(
@@ -170,6 +172,45 @@ class CodexBindingTest(unittest.TestCase):
                 },
             )
             registry.close()
+
+
+class ApprovalReplyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_reply_uses_stored_message_and_thread_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect", "le-wm", "feishu:chat:user", "thread-1", "/workspace"
+            )
+            registry.close()
+            store = ApprovalStore(paths.state_db)
+            store.register(
+                "agent-notifier-approval:1234567890abcdef",
+                "thread-1",
+                "command",
+                {"command": "date"},
+            )
+            store.set_feishu_message_id(
+                "agent-notifier-approval:1234567890abcdef", "om_original"
+            )
+            store.close()
+
+            with patch(
+                "agent_notifier.cli.reply_approval_result_card",
+                new=AsyncMock(return_value="om_reply"),
+            ) as reply:
+                await reply_approval_decision(
+                    paths, "allow", "1234567890", "resolved"
+                )
+
+            reply.assert_awaited_once_with(
+                project="le-wm",
+                message_id="om_original",
+                approval_id="1234567890",
+                decision="allow",
+                status="resolved",
+            )
 
 
 if __name__ == "__main__":
