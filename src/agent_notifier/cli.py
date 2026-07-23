@@ -214,6 +214,60 @@ def current_agent_sessions(
     return "当前 Agent 会话\n\n" + "\n\n".join(lines)
 
 
+async def create_agent_session(
+    paths: Paths,
+    provider: str,
+    project: str | None,
+    external_key: str | None,
+):
+    adapter = _agent_adapter(provider)
+    if not project or not external_key:
+        raise ValueError(
+            "agent-new requires a cc-connect project and session key"
+        )
+
+    registry = SessionRegistry(paths.state_db)
+    try:
+        current = registry.get(adapter, project, external_key)
+        cwd = current.cwd if current else os.getcwd()
+    finally:
+        registry.close()
+
+    rpc = CodexAppServerClient(
+        paths.proxy_socket, "agent-notifier-agent-new"
+    )
+    await rpc.connect()
+    try:
+        result = await rpc.call(
+            "thread/start",
+            {
+                "cwd": cwd,
+                "approvalPolicy": "on-request",
+                "threadSource": "user",
+            },
+        )
+    finally:
+        await rpc.close()
+
+    thread_id = result["thread"]["id"]
+    registry = SessionRegistry(paths.state_db)
+    try:
+        return registry.bind(
+            adapter, project, external_key, thread_id, cwd
+        )
+    finally:
+        registry.close()
+
+
+def format_agent_new(provider: str, mapping) -> str:
+    return (
+        "Agent 会话已新建\n\n"
+        f"类型：{provider.lower()}\n"
+        f"会话：{mapping.short_thread_id}\n"
+        f"目录：{mapping.cwd}"
+    )
+
+
 def switch_agent_session(
     paths: Paths,
     provider: str,
@@ -526,6 +580,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_current.add_argument("--project")
     agent_current.add_argument("--external-key")
+    agent_new = sub.add_parser(
+        "agent-new", help="create and activate a new coding-agent session"
+    )
+    agent_new.add_argument("provider")
+    agent_new.add_argument("--project")
+    agent_new.add_argument("--external-key")
     agent_switch = sub.add_parser(
         "agent-switch", help="switch one coding agent to a subscribed session"
     )
@@ -634,6 +694,19 @@ def main() -> None:
                     ),
                 )
             )
+        elif args.command == "agent-new":
+            ensure_service(paths)
+            mapping = asyncio.run(
+                create_agent_session(
+                    paths,
+                    args.provider,
+                    project=args.project or os.environ.get("CC_PROJECT"),
+                    external_key=(
+                        args.external_key or os.environ.get("CC_SESSION_KEY")
+                    ),
+                )
+            )
+            print(format_agent_new(args.provider, mapping))
         elif args.command == "agent-switch":
             mapping = switch_agent_session(
                 paths,

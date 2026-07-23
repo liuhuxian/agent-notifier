@@ -143,11 +143,15 @@ agent-notifier configure-cc --project le-wm-codex
 cc-connect daemon restart
 ```
 
-`configure-cc` 同时安装或更新两个飞书自定义命令：
+`configure-cc` 同时安装或更新审批与 Agent 会话管理命令：
 
 ```text
 /codex-approve <审批ID>
 /codex-deny <审批ID>
+/agent-list codex
+/agent-current
+/agent-new codex
+/agent-switch codex <THREAD_ID或唯一短ID>
 ```
 
 正常情况下，飞书会收到带“允许”和“拒绝”按钮的交互卡片。点击后卡片会显示
@@ -204,18 +208,24 @@ agent-notifier bind <THREAD_ID> --project le-wm-codex
 ```text
 /agent-list codex
 /agent-current
+/agent-new codex
 /agent-switch codex <THREAD_ID或唯一短ID>
 ```
 
+`/agent-new codex` 通过 Agent Notifier 管理的共享 Codex App Server 创建一个
+全新的 Codex thread，自动订阅通知，并立即将当前飞书聊天的普通任务目标切换到
+新 thread。创建失败时不会改变原来的活动路由。
+
 当前只实现 `codex` provider；后续接入 OpenCode 后沿用相同命令，例如
-`/agent-list opencode`。`/agent-current` 会统一显示各 provider 当前的普通任务
-目标。
+`/agent-new opencode` 和 `/agent-list opencode`。`/agent-current` 会统一显示各
+provider 当前的普通任务目标。
 
 本机对应命令：
 
 ```bash
 agent-notifier agent-list codex --project le-wm-codex
 agent-notifier agent-current --project le-wm-codex
+agent-notifier agent-new codex --project le-wm-codex
 agent-notifier agent-switch codex <THREAD_ID或唯一短ID> --project le-wm-codex
 ```
 
@@ -250,7 +260,8 @@ systemctl --user restart agent-notifier
 这些命令只管理 cc-connect 自己创建或加载的 ACP session，不会列出所有 Codex
 历史 thread。终端恢复的 thread 应通过上述自动绑定或 `agent-notifier bind`
 关联飞书通知路由；使用 `/agent-list codex` 查询已订阅 thread，再通过
-`/agent-switch codex <ID>` 切换任务目标。
+`/agent-switch codex <ID>` 切换任务目标。需要新建 Codex thread 时使用
+`/agent-new codex`，不要使用 cc-connect 的 `/new` 代替。
 
 ## 卸载
 

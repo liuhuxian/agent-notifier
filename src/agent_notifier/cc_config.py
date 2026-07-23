@@ -106,6 +106,12 @@ def _configure_approval_commands(source: str, command: str) -> str:
     )
     source = _upsert_command(
         source,
+        "agent-new",
+        "Create and activate a new coding-agent session",
+        f"{command} agent-new {{{{1}}}}",
+    )
+    source = _upsert_command(
+        source,
         "agent-switch",
         "Switch one coding agent to a subscribed session",
         f"{command} agent-switch {{{{1}}}} {{{{2}}}}",

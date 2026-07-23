@@ -74,6 +74,10 @@ type = "opencode"
             result,
         )
         self.assertIn(
+            'exec = "/home/me/.local/bin/agent-notifier agent-new {{1}}"',
+            result,
+        )
+        self.assertIn(
             'exec = "/home/me/.local/bin/agent-notifier agent-switch {{1}} {{2}}"',
             result,
         )
@@ -107,6 +111,7 @@ exec = "python3 old.py deny {{1}}"
         self.assertEqual(1, once.count('name = "codex-deny"'))
         self.assertEqual(1, once.count('name = "agent-list"'))
         self.assertEqual(1, once.count('name = "agent-current"'))
+        self.assertEqual(1, once.count('name = "agent-new"'))
         self.assertEqual(1, once.count('name = "agent-switch"'))
 
 

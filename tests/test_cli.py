@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from datetime import datetime
@@ -11,7 +12,9 @@ from agent_notifier.cli import (
     approval_decision_message,
     bind_terminal_thread,
     build_parser,
+    create_agent_session,
     current_agent_sessions,
+    format_agent_new,
     format_agent_switch,
     list_agent_sessions,
     reply_approval_decision,
@@ -67,14 +70,133 @@ class CodexBindingTest(unittest.TestCase):
     def test_agent_command_parsers(self):
         listed = build_parser().parse_args(["agent-list", "codex"])
         current = build_parser().parse_args(["agent-current"])
+        created = build_parser().parse_args(["agent-new", "codex"])
         switched = build_parser().parse_args(
             ["agent-switch", "codex", "019e81c0"]
         )
 
         self.assertEqual("codex", listed.provider)
         self.assertEqual("agent-current", current.command)
+        self.assertEqual("codex", created.provider)
         self.assertEqual("codex", switched.provider)
         self.assertEqual("019e81c0", switched.session_id)
+
+    def test_agent_new_creates_and_activates_codex_thread(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "thread-old",
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            rpc = AsyncMock()
+            rpc.call.return_value = {
+                "thread": {
+                    "id": "019f-new-thread",
+                }
+            }
+            with patch(
+                "agent_notifier.cli.CodexAppServerClient",
+                return_value=rpc,
+            ):
+                mapping = asyncio.run(
+                    create_agent_session(
+                        paths,
+                        "codex",
+                        project="le-wm-codex",
+                        external_key="feishu:one",
+                    )
+                )
+
+            rpc.connect.assert_awaited_once()
+            rpc.call.assert_awaited_once_with(
+                "thread/start",
+                {
+                    "cwd": "/workspace/le-wm",
+                    "approvalPolicy": "on-request",
+                    "threadSource": "user",
+                },
+            )
+            rpc.close.assert_awaited_once()
+            self.assertEqual("019f-new-thread", mapping.thread_id)
+            registry = SessionRegistry(paths.state_db)
+            self.assertEqual(
+                "019f-new-thread",
+                registry.get(
+                    "cc_connect", "le-wm-codex", "feishu:one"
+                ).thread_id,
+            )
+            registry.close()
+
+    def test_agent_new_result_is_feishu_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            mapping = registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "019f8dfd-130a-7a92-a115-f437e38e40a8",
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            self.assertEqual(
+                "Agent 会话已新建\n\n"
+                "类型：codex\n"
+                "会话：019f8dfd\n"
+                "目录：/workspace/le-wm",
+                format_agent_new("codex", mapping),
+            )
+
+    def test_agent_new_failure_keeps_current_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "thread-old",
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            rpc = AsyncMock()
+            rpc.call.side_effect = RuntimeError("thread creation failed")
+            with patch(
+                "agent_notifier.cli.CodexAppServerClient",
+                return_value=rpc,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "thread creation failed"
+                ):
+                    asyncio.run(
+                        create_agent_session(
+                            paths,
+                            "codex",
+                            project="le-wm-codex",
+                            external_key="feishu:one",
+                        )
+                    )
+
+            rpc.close.assert_awaited_once()
+            registry = SessionRegistry(paths.state_db)
+            self.assertEqual(
+                "thread-old",
+                registry.get(
+                    "cc_connect", "le-wm-codex", "feishu:one"
+                ).thread_id,
+            )
+            registry.close()
 
     def test_agent_switch_result_is_feishu_readable(self):
         with tempfile.TemporaryDirectory() as tmp:
