@@ -240,6 +240,8 @@ class AppServerProxy:
         self.on_approval_request = on_approval_request
         self._thread_origins: dict[str, str] = {}
         self._turn_text: dict[tuple[str, str], list[str]] = {}
+        self._turn_last_message: dict[tuple[str, str], str] = {}
+        self._turn_final_text: dict[tuple[str, str], str] = {}
         self._completed_turns: set[str] = set()
         self._completed_order: deque[str] = deque()
         self._completed_limit = 10_000
@@ -411,6 +413,18 @@ class AppServerProxy:
                 params.get("delta", "")
             )
             return
+        if method == "item/completed" and thread_id and turn_id:
+            if origin != client_kind:
+                return
+            item = params.get("item") or {}
+            if item.get("type") != "agentMessage":
+                return
+            key = (thread_id, turn_id)
+            text = item.get("text", "")
+            self._turn_last_message[key] = text
+            if item.get("phase") == "final_answer":
+                self._turn_final_text[key] = text
+            return
         if method != "turn/completed" or not thread_id:
             return
         if origin != client_kind:
@@ -423,7 +437,13 @@ class AppServerProxy:
             self._completed_turns.discard(self._completed_order.popleft())
         self._completed_order.append(turn_id)
         self._completed_turns.add(turn_id)
-        text = "".join(self._turn_text.pop((thread_id, turn_id), []))
+        key = (thread_id, turn_id)
+        delta_text = "".join(self._turn_text.pop(key, []))
+        last_message = self._turn_last_message.pop(key, None)
+        final_text = self._turn_final_text.pop(key, None)
+        text = final_text if final_text is not None else (
+            last_message if last_message is not None else delta_text
+        )
         origin = self._thread_origins.pop(thread_id, "terminal")
         if should_send_completion_notification(origin) and self.on_terminal_completion:
             await self.on_terminal_completion(thread_id, text)

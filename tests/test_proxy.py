@@ -497,6 +497,64 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([("thread-terminal", "done")], notifications)
 
+    async def test_terminal_completion_uses_only_last_final_answer(self):
+        notifications = []
+
+        async def notify(thread_id, text):
+            notifications.append((thread_id, text))
+
+        self.proxy.on_terminal_completion = notify
+        self.proxy._thread_origins["thread-terminal"] = "terminal"
+        messages = [
+            ("commentary-1", "commentary"),
+            ("commentary-2", "commentary"),
+            ("final response", "final_answer"),
+        ]
+        for index, (text, phase) in enumerate(messages, start=1):
+            item_id = f"message-{index}"
+            await self.proxy._observe_notification(
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "threadId": "thread-terminal",
+                        "turnId": "turn-1",
+                        "itemId": item_id,
+                        "delta": text,
+                    },
+                }
+            )
+            await self.proxy._observe_notification(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread-terminal",
+                        "turnId": "turn-1",
+                        "completedAtMs": index,
+                        "item": {
+                            "id": item_id,
+                            "type": "agentMessage",
+                            "text": text,
+                            "phase": phase,
+                        },
+                    },
+                }
+            )
+
+        await self.proxy._observe_notification(
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-terminal",
+                    "turn": {"id": "turn-1", "status": "completed"},
+                },
+            }
+        )
+
+        self.assertEqual(
+            [("thread-terminal", "final response")],
+            notifications,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
