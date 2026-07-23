@@ -57,11 +57,11 @@ type = "opencode"
         self.assertEqual(1, target.count('type = "acp"'))
         self.assertNotIn('type = "codex"', target)
         self.assertIn(
-            'exec = "/home/me/.local/bin/agent-notifier decide --quiet allow {{1}}"',
+            'exec = "/home/me/.local/bin/agent-notifier decide allow {{1}}"',
             result,
         )
         self.assertIn(
-            'exec = "/home/me/.local/bin/agent-notifier decide --quiet deny {{1}}"',
+            'exec = "/home/me/.local/bin/agent-notifier decide deny {{1}}"',
             result,
         )
         self.assertIn('name = "codex-switch"', result)

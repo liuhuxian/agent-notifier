@@ -155,7 +155,13 @@ class SharedService:
                 "no Feishu route for terminal completion: thread=%s", thread_id
             )
             return
-        message = text.strip() or f"Codex turn completed: {thread_id}"
+        result = text.strip() or "(无文本输出)"
+        message = (
+            "Codex 回合已完成\n"
+            f"会话：{mapping.session_label} | {mapping.short_thread_id}\n"
+            f"目录：{mapping.cwd}\n"
+            f"结果：\n{result}"
+        )
         await self._send_to_mapping(mapping, message)
 
     async def _notify_approval_request(self, token: str, request: dict) -> None:
@@ -184,6 +190,9 @@ class SharedService:
                 approval_id=request_id,
                 reason=reason,
                 operation=operation,
+                session_label=mapping.session_label,
+                thread_id=thread_id,
+                cwd=mapping.cwd,
             )
             if message_id and self.approval_store:
                 self.approval_store.set_feishu_message_id(token, message_id)

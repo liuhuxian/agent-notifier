@@ -16,6 +16,14 @@ class SessionMapping:
     thread_id: str
     cwd: str
 
+    @property
+    def session_label(self) -> str:
+        return Path(self.cwd).name or self.project.removesuffix("-codex")
+
+    @property
+    def short_thread_id(self) -> str:
+        return self.thread_id[:8]
+
 
 class SessionRegistry:
     def __init__(self, path: Path):

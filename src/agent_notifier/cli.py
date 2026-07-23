@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from aiohttp import ClientSession, UnixConnector
@@ -153,28 +154,23 @@ async def reply_approval_decision(
         approval_id=approval_id,
         decision=decision,
         status=status,
+        session_label=mapping.session_label,
+        thread_id=record.thread_id,
+        cwd=mapping.cwd,
     )
 
 
 def approval_decision_message(
-    status: str, decision: str, approval_id: str, quiet: bool
+    status: str,
+    decision: str,
+    approval_id: str,
+    quiet: bool,
+    now: datetime | None = None,
 ) -> str | None:
     if quiet:
         return None
-    if status == "already_resolved":
-        return (
-            "<text_tag color='orange'>**⚠️ 审批已经被其他端处理**</text_tag>\n\n"
-            f"请求 ID：`{approval_id}`"
-        )
-    if decision == "allow":
-        return (
-            "<text_tag color='green'>**✅ 已允许 Codex 权限请求**</text_tag>\n\n"
-            f"请求 ID：`{approval_id}`"
-        )
-    return (
-        "<text_tag color='red'>**❌ 已拒绝 Codex 权限请求**</text_tag>\n\n"
-        f"请求 ID：`{approval_id}`"
-    )
+    current = now or datetime.now().astimezone()
+    return current.strftime("%Y-%m-%d %H:%M")
 
 
 def _run_version(command: list[str]) -> str:

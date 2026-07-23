@@ -51,6 +51,9 @@ def build_approval_card(
     reason: str,
     operation: str,
     session_key: str,
+    session_label: str,
+    thread_id: str,
+    cwd: str,
 ) -> dict[str, Any]:
     def button(label: str, kind: str, command: str) -> dict[str, Any]:
         return {
@@ -73,6 +76,8 @@ def build_approval_card(
             {
                 "tag": "markdown",
                 "content": (
+                    f"会话：{session_label} | {thread_id[:8]}\n"
+                    f"目录：`{cwd}`\n"
                     f"**请求 ID**：`{approval_id}`\n"
                     f"**原因**：{reason}\n"
                     f"**操作**：`{operation}`"
@@ -94,6 +99,9 @@ def build_approval_result_card(
     approval_id: str,
     decision: str,
     status: str,
+    session_label: str,
+    thread_id: str,
+    cwd: str,
 ) -> dict[str, Any]:
     if status == "already_resolved":
         template = "orange"
@@ -116,7 +124,12 @@ def build_approval_result_card(
         "elements": [
             {
                 "tag": "markdown",
-                "content": f"**请求 ID**：`{approval_id}`\n{detail}",
+                "content": (
+                    f"会话：{session_label} | {thread_id[:8]}\n"
+                    f"目录：`{cwd}`\n"
+                    f"**请求 ID**：`{approval_id}`\n"
+                    f"{detail}"
+                ),
             }
         ],
     }
@@ -148,6 +161,9 @@ async def send_approval_card(
     approval_id: str,
     reason: str,
     operation: str,
+    session_label: str,
+    thread_id: str,
+    cwd: str,
     config_path: Path = DEFAULT_CC_CONFIG,
 ) -> str:
     settings = load_feishu_settings(project, config_path)
@@ -161,7 +177,13 @@ async def send_approval_card(
         if not token:
             raise RuntimeError("Feishu API did not return tenant_access_token")
         card = build_approval_card(
-            approval_id, reason, operation, session_key
+            approval_id,
+            reason,
+            operation,
+            session_key,
+            session_label,
+            thread_id,
+            cwd,
         )
         result = await _post_json(
             session,
@@ -183,6 +205,9 @@ async def reply_approval_result_card(
     approval_id: str,
     decision: str,
     status: str,
+    session_label: str,
+    thread_id: str,
+    cwd: str,
     config_path: Path = DEFAULT_CC_CONFIG,
 ) -> str:
     settings = load_feishu_settings(project, config_path)
@@ -195,7 +220,14 @@ async def reply_approval_result_card(
         token = auth.get("tenant_access_token")
         if not token:
             raise RuntimeError("Feishu API did not return tenant_access_token")
-        card = build_approval_result_card(approval_id, decision, status)
+        card = build_approval_result_card(
+            approval_id,
+            decision,
+            status,
+            session_label,
+            thread_id,
+            cwd,
+        )
         result = await _post_json(
             session,
             f"{settings['domain']}/open-apis/im/v1/messages/{message_id}/reply",

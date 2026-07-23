@@ -50,13 +50,44 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
             with patch(
                 "agent_notifier.service.send_approval_card",
                 new=AsyncMock(return_value="om_original"),
-            ):
+            ) as send_card:
                 await service._notify_approval_request(token, request)
 
             record = service.approval_store.find_by_prefix("1234567890")
             self.assertEqual("om_original", record.feishu_message_id)
+            self.assertEqual(
+                "workspace", send_card.await_args.kwargs["session_label"]
+            )
+            self.assertEqual("thread-1", send_card.await_args.kwargs["thread_id"])
+            self.assertEqual("/workspace", send_card.await_args.kwargs["cwd"])
             service.registry.close()
             service.approval_store.close()
+
+    async def test_completion_notification_includes_session_directory_and_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            service = SharedService(paths)
+            service.registry = SessionRegistry(paths.state_db)
+            service.registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:chat:user",
+                "019e81c0-c415",
+                "/users/huxian/project/le-wm",
+            )
+            service._send_to_mapping = AsyncMock()
+
+            await service._notify_terminal_completion(
+                "019e81c0-c415", "任务执行完成"
+            )
+
+            message = service._send_to_mapping.await_args.args[1]
+            self.assertIn("Codex 回合已完成", message)
+            self.assertIn("会话：le-wm | 019e81c0", message)
+            self.assertIn("目录：/users/huxian/project/le-wm", message)
+            self.assertIn("结果：\n任务执行完成", message)
+            service.registry.close()
 
 
 if __name__ == "__main__":

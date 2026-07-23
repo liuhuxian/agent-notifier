@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -72,29 +73,15 @@ class CodexBindingTest(unittest.TestCase):
             )
         )
 
-    def test_allow_result_is_green_card_markdown(self):
+    def test_nonquiet_result_is_compact_local_time(self):
         message = approval_decision_message(
-            "resolved", "allow", "1234567890", quiet=False
+            "resolved",
+            "allow",
+            "1234567890",
+            quiet=False,
+            now=datetime(2026, 7, 23, 15, 30),
         )
-        self.assertIn("<text_tag color='green'>", message)
-        self.assertIn("已允许 Codex 权限请求", message)
-        self.assertIn("`1234567890`", message)
-
-    def test_deny_result_is_red_card_markdown(self):
-        message = approval_decision_message(
-            "resolved", "deny", "1234567890", quiet=False
-        )
-        self.assertIn("<text_tag color='red'>", message)
-        self.assertIn("已拒绝 Codex 权限请求", message)
-        self.assertIn("`1234567890`", message)
-
-    def test_already_resolved_result_is_orange_card_markdown(self):
-        message = approval_decision_message(
-            "already_resolved", "allow", "1234567890", quiet=False
-        )
-        self.assertIn("<text_tag color='orange'>", message)
-        self.assertIn("审批已经被其他端处理", message)
-        self.assertIn("`1234567890`", message)
+        self.assertEqual("2026-07-23 15:30", message)
 
     def test_terminal_resume_adds_subscription_without_changing_active_route(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,6 +197,9 @@ class ApprovalReplyTest(unittest.IsolatedAsyncioTestCase):
                 approval_id="1234567890",
                 decision="allow",
                 status="resolved",
+                session_label="workspace",
+                thread_id="thread-1",
+                cwd="/workspace",
             )
 
 
