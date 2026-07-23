@@ -16,7 +16,7 @@ from pathlib import Path
 
 from aiohttp import ClientSession, UnixConnector
 
-from .agent_commands import run_agent_command
+from .agent_commands import format_agent_help, run_agent_command
 from .approvals import ApprovalStore
 from .acp.server import ACPStdioServer
 from .cc_config import configure_project
@@ -653,6 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_cmd.add_argument("--project")
     agent_cmd.add_argument("--external-key")
+    sub.add_parser("agent-help", help="show Agent Notifier chat commands")
     decide = sub.add_parser(
         "decide", help="resolve a pending Codex approval request"
     )
@@ -793,6 +794,8 @@ def main() -> None:
                     )
                 )
             )
+        elif args.command == "agent-help":
+            print(format_agent_help())
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(

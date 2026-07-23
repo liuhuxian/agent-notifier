@@ -122,6 +122,12 @@ def _configure_approval_commands(source: str, command: str) -> str:
         "Run a safe read-only command on the active coding agent",
         f"{command} agent-cmd {{{{1}}}}",
     )
+    source = _upsert_command(
+        source,
+        "agent-help",
+        "Show Agent Notifier chat commands",
+        f"{command} agent-help",
+    )
     return _remove_command(source, "codex-switch")
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from agent_notifier.approvals import ApprovalStore
-from agent_notifier.agent_commands import run_agent_command
+from agent_notifier.agent_commands import format_agent_help, run_agent_command
 from agent_notifier.cli import (
     _resume_thread_id,
     activate_terminal_thread,
@@ -77,6 +77,7 @@ class CodexBindingTest(unittest.TestCase):
             ["agent-switch", "codex", "019e81c0"]
         )
         queried = build_parser().parse_args(["agent-cmd", "status"])
+        help_command = build_parser().parse_args(["agent-help"])
 
         self.assertEqual("codex", listed.provider)
         self.assertEqual("agent-current", current.command)
@@ -84,6 +85,31 @@ class CodexBindingTest(unittest.TestCase):
         self.assertEqual("codex", switched.provider)
         self.assertEqual("019e81c0", switched.session_id)
         self.assertEqual("status", queried.agent_command)
+        self.assertEqual("agent-help", help_command.command)
+
+    def test_agent_help_lists_registered_user_commands(self):
+        result = format_agent_help()
+        for command in (
+            "/agent-list codex",
+            "/agent-current",
+            "/agent-new codex",
+            "/agent-switch codex",
+            "/agent-cmd status",
+            "/agent-cmd model",
+            "/agent-cmd usage",
+            "/agent-cmd session",
+            "/codex-approve",
+            "/codex-deny",
+            "/agent-help",
+        ):
+            self.assertIn(command, result)
+        for description in (
+            "查看已订阅的 Codex 会话",
+            "查看当前飞书聊天绑定的 Agent 会话",
+            "新建 Codex 会话并自动切换过去",
+            "切换当前飞书聊天使用的 Codex 会话",
+        ):
+            self.assertIn(description, result)
 
     def test_agent_command_rejects_non_whitelisted_command(self):
         with tempfile.TemporaryDirectory() as tmp:

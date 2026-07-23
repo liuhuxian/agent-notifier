@@ -157,6 +157,7 @@ cc-connect daemon restart
 /agent-new codex
 /agent-switch codex <THREAD_ID或唯一短ID>
 /agent-cmd <status|model|usage|session>
+/agent-help
 ```
 
 正常情况下，飞书会收到带“允许”和“拒绝”按钮的交互卡片。点击后卡片会显示
@@ -216,6 +217,7 @@ agent-notifier bind <THREAD_ID> --project le-wm-codex
 /agent-new codex
 /agent-switch codex <THREAD_ID或唯一短ID>
 /agent-cmd <status|model|usage|session>
+/agent-help
 ```
 
 `/agent-new codex` 通过 Agent Notifier 管理的共享 Codex App Server 创建一个
@@ -239,6 +241,7 @@ provider 当前的普通任务目标。
 
 `usage` 的 thread token 数据来自 Codex App Server 的实时通知；服务重启后若当前
 thread 尚未完成新回合，会明确显示暂无缓存。账户限额则在查询时实时读取。
+使用 `/agent-help` 可在飞书中查看当前已注册命令及其参数。
 
 本机对应命令：
 

@@ -85,6 +85,10 @@ type = "opencode"
             'exec = "/home/me/.local/bin/agent-notifier agent-cmd {{1}}"',
             result,
         )
+        self.assertIn(
+            'exec = "/home/me/.local/bin/agent-notifier agent-help"',
+            result,
+        )
 
     def test_missing_project_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -118,6 +122,7 @@ exec = "python3 old.py deny {{1}}"
         self.assertEqual(1, once.count('name = "agent-new"'))
         self.assertEqual(1, once.count('name = "agent-switch"'))
         self.assertEqual(1, once.count('name = "agent-cmd"'))
+        self.assertEqual(1, once.count('name = "agent-help"'))
 
 
 class ApprovalMessageTest(unittest.TestCase):

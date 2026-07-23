@@ -12,6 +12,31 @@ from .registry import SessionMapping, SessionRegistry
 SUPPORTED_AGENT_COMMANDS = frozenset({"status", "model", "usage", "session"})
 
 
+def format_agent_help() -> str:
+    return (
+        "Agent Notifier 命令\n\n"
+        "会话管理\n"
+        "/agent-list codex\n"
+        "  查看已订阅的 Codex 会话\n"
+        "/agent-current\n"
+        "  查看当前飞书聊天绑定的 Agent 会话\n"
+        "/agent-new codex\n"
+        "  新建 Codex 会话并自动切换过去\n"
+        "/agent-switch codex <会话ID或唯一短ID>\n"
+        "  切换当前飞书聊天使用的 Codex 会话\n\n"
+        "只读查询\n"
+        "/agent-cmd status    当前状态摘要\n"
+        "/agent-cmd model     模型与推理强度\n"
+        "/agent-cmd usage     Token 与账户限额\n"
+        "/agent-cmd session   完整会话信息\n\n"
+        "权限审批\n"
+        "/codex-approve <审批ID>\n"
+        "/codex-deny <审批ID>\n\n"
+        "帮助\n"
+        "/agent-help"
+    )
+
+
 def _format_number(value) -> str:
     return f"{int(value or 0):,}"
 
