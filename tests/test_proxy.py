@@ -648,6 +648,31 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
             [("thread-cc", "remote progress")], remote_progress
         )
 
+    async def test_token_usage_notification_calls_persistence_callback(self):
+        notifications = []
+
+        async def record(thread_id, token_usage):
+            notifications.append((thread_id, token_usage))
+
+        self.proxy.on_token_usage = record
+        usage = {
+            "total": {"totalTokens": 120},
+            "last": {"totalTokens": 20},
+            "modelContextWindow": 1000,
+        }
+        await self.proxy._observe_notification(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": "thread-usage",
+                    "turnId": "turn-usage",
+                    "tokenUsage": usage,
+                },
+            }
+        )
+
+        self.assertEqual([("thread-usage", usage)], notifications)
+
     async def test_terminal_completion_uses_only_last_final_answer(self):
         notifications = []
 

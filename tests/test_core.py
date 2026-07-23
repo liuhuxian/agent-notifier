@@ -102,6 +102,32 @@ class RegistryTest(unittest.TestCase):
             self.assertEqual(2, len(registry.list_routes("cc_connect")))
             registry.close()
 
+    def test_active_agent_and_token_usage_persist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "state.sqlite3"
+            first = SessionRegistry(db)
+            first.set_active_agent("le-wm", "feishu:one", "codex")
+            first.update_thread_token_usage(
+                "thread-1",
+                {
+                    "total": {"totalTokens": 120},
+                    "last": {"totalTokens": 20},
+                    "modelContextWindow": 1000,
+                },
+            )
+            first.close()
+
+            second = SessionRegistry(db)
+            active = second.get_active_agent("le-wm", "feishu:one")
+            self.assertEqual("codex", active.provider)
+            self.assertEqual(
+                120,
+                second.get_thread_token_usage("thread-1")["total"][
+                    "totalTokens"
+                ],
+            )
+            second.close()
+
 
 class ApprovalStoreTest(unittest.TestCase):
     def test_first_resolution_wins(self):

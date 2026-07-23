@@ -16,6 +16,7 @@ from pathlib import Path
 
 from aiohttp import ClientSession, UnixConnector
 
+from .agent_commands import run_agent_command
 from .approvals import ApprovalStore
 from .acp.server import ACPStdioServer
 from .cc_config import configure_project
@@ -101,13 +102,17 @@ def activate_terminal_thread(
                 f"(projects: {projects}); specify --project"
             )
         route = subscriptions[0]
-        return registry.bind(
+        mapping = registry.bind(
             route.adapter,
             route.project,
             route.external_key,
             route.thread_id,
             route.cwd,
         )
+        registry.set_active_agent(
+            route.project, route.external_key, "codex"
+        )
+        return mapping
     finally:
         registry.close()
 
@@ -193,7 +198,15 @@ def current_agent_sessions(
 ) -> str:
     registry = SessionRegistry(paths.state_db)
     try:
-        routes = registry.list_routes("cc_connect", project=project)
+        if project and external_key:
+            active = registry.get_active_agent(project, external_key)
+            provider = active.provider if active else "codex"
+            adapter = _agent_adapter(provider)
+            route = registry.get(adapter, project, external_key)
+            routes = [route] if route else []
+        else:
+            provider = "codex"
+            routes = registry.list_routes("cc_connect", project=project)
     finally:
         registry.close()
     if external_key is not None:
@@ -203,11 +216,11 @@ def current_agent_sessions(
 
     lines = []
     if not routes:
-        lines.append("类型：codex\n会话：（未绑定）")
+        lines.append(f"类型：{provider}\n会话：（未绑定）")
     else:
         for route in routes:
             lines.append(
-                "类型：codex\n"
+                f"类型：{provider}\n"
                 f"会话：{route.short_thread_id}\n"
                 f"目录：{route.cwd}"
             )
@@ -285,9 +298,11 @@ async def create_agent_session(
 
     registry = SessionRegistry(paths.state_db)
     try:
-        return registry.bind(
+        mapping = registry.bind(
             adapter, project, external_key, thread_id, cwd
         )
+        registry.set_active_agent(project, external_key, provider.lower())
+        return mapping
     finally:
         registry.close()
 
@@ -336,13 +351,17 @@ def switch_agent_session(
                 "use a longer session ID"
             )
         route = next(iter(unique.values()))
-        return registry.bind(
+        mapping = registry.bind(
             route.adapter,
             route.project,
             route.external_key,
             route.thread_id,
             route.cwd,
         )
+        registry.set_active_agent(
+            route.project, route.external_key, provider.lower()
+        )
+        return mapping
     finally:
         registry.close()
 
@@ -626,6 +645,14 @@ def build_parser() -> argparse.ArgumentParser:
     agent_switch.add_argument("session_id")
     agent_switch.add_argument("--project")
     agent_switch.add_argument("--external-key")
+    agent_cmd = sub.add_parser(
+        "agent-cmd", help="run a safe read-only command on the active agent"
+    )
+    agent_cmd.add_argument(
+        "agent_command", choices=("status", "model", "usage", "session")
+    )
+    agent_cmd.add_argument("--project")
+    agent_cmd.add_argument("--external-key")
     decide = sub.add_parser(
         "decide", help="resolve a pending Codex approval request"
     )
@@ -751,6 +778,21 @@ def main() -> None:
                 ),
             )
             print(format_agent_switch(args.provider, mapping))
+        elif args.command == "agent-cmd":
+            ensure_service(paths)
+            print(
+                asyncio.run(
+                    run_agent_command(
+                        paths,
+                        args.agent_command,
+                        project=args.project or os.environ.get("CC_PROJECT"),
+                        external_key=(
+                            args.external_key
+                            or os.environ.get("CC_SESSION_KEY")
+                        ),
+                    )
+                )
+            )
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(

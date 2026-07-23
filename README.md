@@ -156,6 +156,7 @@ cc-connect daemon restart
 /agent-current
 /agent-new codex
 /agent-switch codex <THREAD_ID或唯一短ID>
+/agent-cmd <status|model|usage|session>
 ```
 
 正常情况下，飞书会收到带“允许”和“拒绝”按钮的交互卡片。点击后卡片会显示
@@ -214,6 +215,7 @@ agent-notifier bind <THREAD_ID> --project le-wm-codex
 /agent-current
 /agent-new codex
 /agent-switch codex <THREAD_ID或唯一短ID>
+/agent-cmd <status|model|usage|session>
 ```
 
 `/agent-new codex` 通过 Agent Notifier 管理的共享 Codex App Server 创建一个
@@ -226,6 +228,18 @@ agent-notifier bind <THREAD_ID> --project le-wm-codex
 `/agent-new opencode` 和 `/agent-list opencode`。`/agent-current` 会统一显示各
 provider 当前的普通任务目标。
 
+`/agent-cmd` 不需要重复指定 provider，它会读取当前飞书聊天由
+`/agent-new` 或 `/agent-switch` 选中的 Agent 类型并自动分发。为避免把飞书命令
+变成任意终端入口，当前只允许四个只读命令：
+
+- `/agent-cmd status`：活动会话、运行状态、模型和用量摘要
+- `/agent-cmd model`：模型与推理强度
+- `/agent-cmd usage`：最近/累计 token 与账户限额窗口
+- `/agent-cmd session`：完整会话 ID、目录和运行状态
+
+`usage` 的 thread token 数据来自 Codex App Server 的实时通知；服务重启后若当前
+thread 尚未完成新回合，会明确显示暂无缓存。账户限额则在查询时实时读取。
+
 本机对应命令：
 
 ```bash
@@ -233,6 +247,7 @@ agent-notifier agent-list codex --project le-wm-codex
 agent-notifier agent-current --project le-wm-codex
 agent-notifier agent-new codex --project le-wm-codex
 agent-notifier agent-switch codex <THREAD_ID或唯一短ID> --project le-wm-codex
+agent-notifier agent-cmd status --project le-wm-codex
 ```
 
 该操作只改变 active task target。其他已订阅 thread 的权限审批、完成和失败通知

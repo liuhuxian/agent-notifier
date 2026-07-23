@@ -116,6 +116,12 @@ def _configure_approval_commands(source: str, command: str) -> str:
         "Switch one coding agent to a subscribed session",
         f"{command} agent-switch {{{{1}}}} {{{{2}}}}",
     )
+    source = _upsert_command(
+        source,
+        "agent-cmd",
+        "Run a safe read-only command on the active coding agent",
+        f"{command} agent-cmd {{{{1}}}}",
+    )
     return _remove_command(source, "codex-switch")
 
 

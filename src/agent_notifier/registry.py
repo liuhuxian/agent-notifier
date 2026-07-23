@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -23,6 +24,13 @@ class SessionMapping:
     @property
     def short_thread_id(self) -> str:
         return self.thread_id[:8]
+
+
+@dataclass(frozen=True)
+class ActiveAgent:
+    project: str
+    external_key: str
+    provider: str
 
 
 class SessionRegistry:
@@ -54,6 +62,26 @@ class SessionRegistry:
                 cwd TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (adapter, project, external_key, thread_id)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_agents (
+                project TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (project, external_key)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thread_token_usage (
+                thread_id TEXT PRIMARY KEY,
+                token_usage_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -149,6 +177,64 @@ class SessionRegistry:
                 (adapter, project, external_key),
             ).fetchone()
         return SessionMapping(*row) if row else None
+
+    def set_active_agent(
+        self, project: str, external_key: str, provider: str
+    ) -> ActiveAgent:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO active_agents (project, external_key, provider)
+                VALUES (?, ?, ?)
+                ON CONFLICT(project, external_key) DO UPDATE SET
+                    provider = excluded.provider,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (project, external_key, provider),
+            )
+        return ActiveAgent(project, external_key, provider)
+
+    def get_active_agent(
+        self, project: str, external_key: str
+    ) -> ActiveAgent | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT project, external_key, provider
+                FROM active_agents
+                WHERE project = ? AND external_key = ?
+                """,
+                (project, external_key),
+            ).fetchone()
+        return ActiveAgent(*row) if row else None
+
+    def update_thread_token_usage(
+        self, thread_id: str, token_usage: dict
+    ) -> None:
+        payload = json.dumps(token_usage, ensure_ascii=False, sort_keys=True)
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO thread_token_usage (thread_id, token_usage_json)
+                VALUES (?, ?)
+                ON CONFLICT(thread_id) DO UPDATE SET
+                    token_usage_json = excluded.token_usage_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (thread_id, payload),
+            )
+
+    def get_thread_token_usage(self, thread_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT token_usage_json
+                FROM thread_token_usage
+                WHERE thread_id = ?
+                """,
+                (thread_id,),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
 
     def find_by_thread(self, thread_id: str) -> SessionMapping | None:
         with self._lock:

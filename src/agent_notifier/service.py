@@ -117,6 +117,7 @@ class SharedService:
                         on_remote_progress=self._notify_remote_progress,
                         approval_store=self.approval_store,
                         on_approval_request=self._notify_approval_request,
+                        on_token_usage=self._record_token_usage,
                     )
                     await self.proxy.start()
                     backoff = 1.0
@@ -165,6 +166,12 @@ class SharedService:
             f"结果：\n{result}"
         )
         await self._send_to_mapping(mapping, message)
+
+    async def _record_token_usage(
+        self, thread_id: str, token_usage: dict
+    ) -> None:
+        if self.registry:
+            self.registry.update_thread_token_usage(thread_id, token_usage)
 
     async def _notify_remote_completion(self, thread_id: str, text: str) -> None:
         mapping = self.registry.find_by_thread(thread_id) if self.registry else None

@@ -238,6 +238,7 @@ class AppServerProxy:
         on_remote_progress: Callable[[str, str], Awaitable[None]] | None = None,
         approval_store: ApprovalStore | None = None,
         on_approval_request: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_token_usage: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
         self.listen_socket = Path(listen_socket)
         self.upstream_socket = Path(upstream_socket)
@@ -248,6 +249,7 @@ class AppServerProxy:
         self.on_remote_completion = on_remote_completion
         self.on_remote_progress = on_remote_progress
         self.on_approval_request = on_approval_request
+        self.on_token_usage = on_token_usage
         self._thread_origins: dict[str, str] = {}
         self._turn_text: dict[tuple[str, str], list[str]] = {}
         self._turn_last_message: dict[tuple[str, str], str] = {}
@@ -433,6 +435,12 @@ class AppServerProxy:
         thread_id = params.get("threadId")
         turn_id = params.get("turnId")
         origin = self._thread_origins.get(thread_id) if thread_id else None
+        if method == "thread/tokenUsage/updated" and thread_id:
+            if self.on_token_usage:
+                await self.on_token_usage(
+                    thread_id, params.get("tokenUsage") or {}
+                )
+            return
         if method == "item/agentMessage/delta" and thread_id and turn_id:
             self._turn_text.setdefault((thread_id, turn_id), []).append(
                 params.get("delta", "")

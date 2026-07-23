@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from agent_notifier.approvals import ApprovalStore
+from agent_notifier.agent_commands import run_agent_command
 from agent_notifier.cli import (
     _resume_thread_id,
     activate_terminal_thread,
@@ -75,12 +76,97 @@ class CodexBindingTest(unittest.TestCase):
         switched = build_parser().parse_args(
             ["agent-switch", "codex", "019e81c0"]
         )
+        queried = build_parser().parse_args(["agent-cmd", "status"])
 
         self.assertEqual("codex", listed.provider)
         self.assertEqual("agent-current", current.command)
         self.assertEqual("codex", created.provider)
         self.assertEqual("codex", switched.provider)
         self.assertEqual("019e81c0", switched.session_id)
+        self.assertEqual("status", queried.agent_command)
+
+    def test_agent_command_rejects_non_whitelisted_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            with self.assertRaisesRegex(ValueError, "仅支持"):
+                asyncio.run(
+                    run_agent_command(
+                        paths, "shell", "le-wm", "feishu:one"
+                    )
+                )
+
+    def test_agent_commands_query_active_codex_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm",
+                "feishu:one",
+                "019f-thread",
+                "/workspace/le-wm",
+            )
+            registry.set_active_agent("le-wm", "feishu:one", "codex")
+            registry.update_thread_token_usage(
+                "019f-thread",
+                {
+                    "total": {
+                        "totalTokens": 1200,
+                        "inputTokens": 1000,
+                        "outputTokens": 200,
+                    },
+                    "last": {
+                        "totalTokens": 120,
+                        "inputTokens": 100,
+                        "outputTokens": 20,
+                    },
+                    "modelContextWindow": 200000,
+                },
+            )
+            registry.close()
+
+            rpc = AsyncMock()
+            rpc.call.side_effect = [
+                {
+                    "thread": {
+                        "id": "019f-thread",
+                        "cwd": "/workspace/le-wm",
+                        "status": {"type": "idle"},
+                    }
+                },
+                {
+                    "config": {
+                        "model": "gpt-5.3-codex",
+                        "model_reasoning_effort": "high",
+                    }
+                },
+                {
+                    "rateLimits": {
+                        "primary": {
+                            "usedPercent": 12,
+                            "resetsAt": 1780000000,
+                        }
+                    }
+                },
+            ]
+            with patch(
+                "agent_notifier.agent_commands.CodexAppServerClient",
+                return_value=rpc,
+            ):
+                result = asyncio.run(
+                    run_agent_command(
+                        paths, "status", "le-wm", "feishu:one"
+                    )
+                )
+
+            self.assertIn("会话：019f-thr", result)
+            self.assertIn("状态：idle", result)
+            self.assertIn("模型：gpt-5.3-codex", result)
+            self.assertIn("累计 Token：1,200", result)
+            self.assertIn("主窗口：已用 12%", result)
+            rpc.connect.assert_awaited_once()
+            rpc.close.assert_awaited_once()
 
     def test_agent_new_creates_and_activates_codex_thread(self):
         with tempfile.TemporaryDirectory() as tmp:

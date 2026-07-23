@@ -139,6 +139,29 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
             )
             service.registry.close()
 
+    async def test_token_usage_is_recorded_for_command_queries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            service = SharedService(paths)
+            service.registry = SessionRegistry(paths.state_db)
+
+            await service._record_token_usage(
+                "thread-1",
+                {
+                    "total": {"totalTokens": 99},
+                    "last": {"totalTokens": 9},
+                },
+            )
+
+            self.assertEqual(
+                99,
+                service.registry.get_thread_token_usage("thread-1")[
+                    "total"
+                ]["totalTokens"],
+            )
+            service.registry.close()
+
 
 if __name__ == "__main__":
     unittest.main()
