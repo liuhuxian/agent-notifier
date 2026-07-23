@@ -6,13 +6,13 @@ import json
 import re
 
 
-PROJECT_START = re.compile(r"(?m)(?=^\[\[projects\]\]\s*$)")
+PROJECT_START = re.compile(r"(?m)(?=^\s*\[\[projects\]\]\s*$)")
 
 
 def _set_key(section: str, key: str, value: str) -> str:
-    pattern = re.compile(rf"(?m)^{re.escape(key)}\s*=.*$")
+    pattern = re.compile(rf"(?m)^(\s*){re.escape(key)}\s*=.*$")
     if pattern.search(section):
-        return pattern.sub(f"{key} = {value}", section, count=1)
+        return pattern.sub(lambda match: f"{match.group(1)}{key} = {value}", section, count=1)
     if not section.endswith("\n"):
         section += "\n"
     return section + f"{key} = {value}\n"
@@ -29,7 +29,7 @@ def _replace_table_body(block: str, table: str, update) -> str:
         body_start = len(block)
     else:
         body_start += 1
-    next_table = re.search(r"(?m)^\[", block[body_start:])
+    next_table = re.search(r"(?m)^\s*\[", block[body_start:])
     body_end = body_start + next_table.start() if next_table else len(block)
     body = update(block[body_start:body_end])
     return block[:body_start] + body + block[body_end:]
@@ -40,9 +40,9 @@ def configure_project(source: str, project_name: str, command: str) -> str:
     parts = PROJECT_START.split(source)
     found = False
     for index, block in enumerate(parts):
-        if not block.startswith("[[projects]]"):
+        if not re.match(r"^\s*\[\[projects\]\]", block):
             continue
-        name = re.search(r'(?m)^name\s*=\s*"([^"]+)"\s*$', block)
+        name = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"\s*$', block)
         if not name or name.group(1) != project_name:
             continue
         found = True

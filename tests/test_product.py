@@ -35,12 +35,12 @@ class CCConfigTest(unittest.TestCase):
     def test_target_project_becomes_acp_without_changing_other_project(self):
         source = '''
 [[projects]]
-name = "le-wm-codex"
-[projects.agent]
-type = "codex"
-[projects.agent.options]
-mode = "auto-edit"
-work_dir = "/workspace"
+  name = "le-wm-codex"
+  [projects.agent]
+    type = "codex"
+  [projects.agent.options]
+    mode = "auto-edit"
+    work_dir = "/workspace"
 
 [[projects]]
 name = "other"
@@ -53,6 +53,8 @@ type = "opencode"
         self.assertIn('command = "/home/me/.local/bin/agent-notifier"', target)
         self.assertIn('args = ["acp"]', target)
         self.assertIn('type = "opencode"', other)
+        self.assertEqual(1, target.count('type = "acp"'))
+        self.assertNotIn('type = "codex"', target)
 
     def test_missing_project_is_rejected(self):
         with self.assertRaises(ValueError):

@@ -8,6 +8,7 @@ ExecStart=%h/.local/bin/agent-notifier serve --codex @CODEX_BINARY@
 Restart=on-failure
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1
+Environment="PATH=@SERVICE_PATH@"
 
 [Install]
 WantedBy=default.target
