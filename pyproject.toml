@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-notifier"
+version = "0.1.0"
+description = "Shared coding-agent sessions with reliable notifications and remote approvals"
+requires-python = ">=3.10"
+dependencies = ["aiohttp>=3.8"]
+
+[project.scripts]
+agent-notifier = "agent_notifier.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

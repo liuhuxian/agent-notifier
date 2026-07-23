@@ -60,11 +60,11 @@ backoff. Runtime state is never stored in the source repository.
 
 ### Protocol Proxy
 
-The proxy forwards JSON-RPC between clients and Codex. Request IDs are rewritten
-to avoid collisions, then restored on the response path. Notifications are
-broadcast only to clients subscribed to the relevant thread. Server-initiated
-approval requests are registered once and fan out to eligible clients; later
-responses receive an explicit already-resolved result.
+The proxy gives every downstream client its own App Server connection, so normal
+JSON-RPC request IDs remain connection-local and need no global rewriting.
+Server-initiated approval requests receive a synthetic fan-out ID, are persisted,
+and are sent to eligible clients. The first response is forwarded to the
+originating App Server connection; later responses are ignored idempotently.
 
 ### Session Registry
 
@@ -77,7 +77,7 @@ restart cannot produce two threads for one external session.
 Uses generated Codex App Server protocol shapes rather than terminal text. It
 implements thread create/resume, turn start/steer, event streaming, interrupt,
 and approval responses. It rejects unsupported Codex versions with a clear
-compatibility error unless the user explicitly opts into an unverified version.
+compatibility error.
 
 ### cc-connect ACP Adapter
 
@@ -97,36 +97,37 @@ the normal streamed/final reply already reaches that chat.
 ## Configuration And State
 
 ```text
-~/.config/agent-notifier/config.toml
+~/.config/agent-notifier/
 ~/.local/state/agent-notifier/state.sqlite3
 ~/.local/state/agent-notifier/logs/
 ~/.local/share/agent-notifier/venv/
 $XDG_RUNTIME_DIR/agent-notifier/*.sock
 ```
 
-The installer backs up `~/.cc-connect/config.toml` before changing an agent
-entry and records enough information to restore it during uninstall.
+Configuration commands back up `~/.cc-connect/config.toml` and Codex hooks before
+changing them, and record enough information for explicit restore commands.
 
 ## Failure Handling
 
-- A dead App Server is restarted and clients receive a reconnecting event.
+- A dead App Server is restarted with bounded backoff; connected clients fail
+  explicitly and can reconnect through cc-connect or a new TUI invocation.
 - Requests in flight at process death fail explicitly; they are never silently
   replayed.
-- A non-steerable active turn returns a busy response instead of starting a
+- Messages received during an active turn use `turn/steer` instead of starting a
   second competing turn.
 - Approval resolution is idempotent and persisted before the response is sent.
-- Invalid or incompatible protocol messages are logged with secrets redacted.
-- Installer failures restore the previous cc-connect configuration.
+- Unsupported external versions fail before service or adapter startup.
 
 ## Verification
 
-- Unit tests cover registry transactions, origin policy, ID routing, and
+- Unit tests cover registry transactions, origin policy, protocol routing, and
   approval first-writer-wins behavior.
 - Integration tests use fake App Server and ACP clients over real streams.
-- A two-client test verifies that one terminal and one ACP client share a thread.
-- Restart tests verify recovery of mappings without replaying turns.
-- A real smoke test checks Codex 0.145.0 and cc-connect 1.3.2, including at least
-  one terminal prompt, one Feishu/ACP prompt, and one approval flow.
+- A fan-out test verifies that terminal and ACP responders share one persisted
+  approval and only one response reaches Codex.
+- Real smoke tests verify Codex 0.145.0 App Server initialization, cc-connect
+  1.3.2 ACP session creation, and 60-second service stability. Live Feishu
+  prompt/approval verification remains a deployment check.
 
 ## Explicit Non-Goals For V1
 

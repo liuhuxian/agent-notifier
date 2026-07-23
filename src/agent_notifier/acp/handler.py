@@ -1,0 +1,102 @@
+"""ACP method translation independent of the stdio transport."""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
+
+
+class AgentBackend(Protocol):
+    async def start_thread(self, cwd: str, project: str, external_key: str) -> str: ...
+    async def resume_thread(
+        self, thread_id: str, cwd: str, project: str, external_key: str
+    ) -> str: ...
+    async def prompt(
+        self,
+        thread_id: str,
+        text: str,
+        origin: str,
+        emit: Callable[[dict], Awaitable[None]],
+    ) -> dict: ...
+    async def cancel(self, thread_id: str) -> None: ...
+
+
+class ACPMethodError(RuntimeError):
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+class ACPHandler:
+    def __init__(
+        self,
+        backend: AgentBackend,
+        cwd: str,
+        project: str,
+        external_key: str,
+        emit: Callable[[str, dict], Awaitable[None]],
+    ):
+        self.backend = backend
+        self.cwd = cwd
+        self.project = project
+        self.external_key = external_key
+        self.emit = emit
+        self.session_id: str | None = None
+
+    async def request(self, method: str, params: dict[str, Any]) -> dict:
+        if method == "initialize":
+            return {
+                "protocolVersion": 1,
+                "agentCapabilities": {"loadSession": True},
+                "authMethods": [],
+                "agentInfo": {"name": "agent-notifier", "version": "0.1.0"},
+            }
+        if method == "authenticate":
+            return {}
+        if method == "session/new":
+            cwd = params.get("cwd") or self.cwd
+            self.session_id = await self.backend.start_thread(
+                cwd, self.project, self.external_key
+            )
+            return {"sessionId": self.session_id}
+        if method == "session/load":
+            session_id = params.get("sessionId")
+            if not session_id:
+                raise ACPMethodError(-32602, "sessionId is required")
+            cwd = params.get("cwd") or self.cwd
+            self.session_id = await self.backend.resume_thread(
+                session_id, cwd, self.project, self.external_key
+            )
+            return {"sessionId": self.session_id}
+        if method == "session/prompt":
+            session_id = params.get("sessionId") or self.session_id
+            if not session_id:
+                raise ACPMethodError(-32602, "session is not initialized")
+            text = "".join(
+                block.get("text", "")
+                for block in params.get("prompt", [])
+                if block.get("type") == "text"
+            )
+
+            async def emit_backend(event: dict) -> None:
+                if event.get("kind") == "text" and event.get("text"):
+                    await self.emit(
+                        "session/update",
+                        {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": event["text"]},
+                            },
+                        },
+                    )
+
+            return await self.backend.prompt(
+                session_id, text, "cc_connect", emit_backend
+            )
+        if method == "session/cancel":
+            session_id = params.get("sessionId") or self.session_id
+            if session_id:
+                await self.backend.cancel(session_id)
+            return {}
+        raise ACPMethodError(-32601, f"method not implemented: {method}")
