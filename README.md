@@ -58,8 +58,9 @@ agent-notifier doctor
   第一份有效响应生效，晚到响应会提示已经处理。
 - 飞书向已绑定 thread 提交任务时，同一 thread 的已打开终端会同步显示
   `turn/*`、`item/*` 和工具执行进度；普通 JSON-RPC 响应仍只返回原请求方。
-- 飞书发起的 turn 由 Agent Notifier 直接投递最终回复；ACP 只返回回合完成
-  状态，不再经 cc-connect 重复回传同一段文本。
+- 飞书发起的 turn 中，Agent Notifier 直接投递完整 commentary 进度；最终回复只经
+  ACP 返回 cc-connect，由 cc-connect 发送并写入会话历史，避免重复回复和
+  Reply chain 中的 `(empty response)`。
 - 飞书来源的中间进度在每个完整 commentary 消息结束后投递一次，不发送
   token 级碎片，并按 thread/turn/item 去重。
 

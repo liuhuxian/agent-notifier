@@ -67,14 +67,19 @@ class ACPHandlerTest(unittest.IsolatedAsyncioTestCase):
             self.backend.loaded,
         )
 
-    async def test_prompt_defers_text_delivery_to_agent_notifier(self):
+    async def test_prompt_forwards_final_text_to_cc_connect_history(self):
         await self.handler.request("session/load", {"sessionId": "thread-old"})
         result = await self.handler.request(
             "session/prompt",
             {"sessionId": "thread-old", "prompt": [{"type": "text", "text": "go"}]},
         )
         self.assertEqual("end_turn", result["stopReason"])
-        self.assertEqual([], self.events)
+        chunks = [
+            params["update"]["content"]["text"]
+            for method, params in self.events
+            if method == "session/update"
+        ]
+        self.assertEqual(["hello ", "world"], chunks)
         self.assertEqual([("thread-old", "go", "cc_connect")], self.backend.prompts)
 
     async def test_prompt_uses_active_target_but_keeps_cc_session_for_updates(self):
@@ -88,7 +93,10 @@ class ACPHandlerTest(unittest.IsolatedAsyncioTestCase):
             [("thread-terminal", "go", "cc_connect")],
             self.backend.prompts,
         )
-        self.assertEqual([], self.events)
+        self.assertEqual(
+            {"thread-cc"},
+            {params["sessionId"] for _, params in self.events},
+        )
 
     async def test_codex_approval_round_trips_through_cc_connect(self):
         output = io.StringIO()

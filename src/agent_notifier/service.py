@@ -113,7 +113,6 @@ class SharedService:
                         self.paths.proxy_socket,
                         self.paths.upstream_socket,
                         on_terminal_completion=self._notify_terminal_completion,
-                        on_remote_completion=self._notify_remote_completion,
                         on_remote_progress=self._notify_remote_progress,
                         approval_store=self.approval_store,
                         on_approval_request=self._notify_approval_request,
@@ -172,15 +171,6 @@ class SharedService:
     ) -> None:
         if self.registry:
             self.registry.update_thread_token_usage(thread_id, token_usage)
-
-    async def _notify_remote_completion(self, thread_id: str, text: str) -> None:
-        mapping = self.registry.find_by_thread(thread_id) if self.registry else None
-        if mapping is None:
-            logger.warning(
-                "no Feishu route for remote completion: thread=%s", thread_id
-            )
-            return
-        await self._send_to_mapping(mapping, text.strip() or "(无文本输出)")
 
     async def _notify_remote_progress(self, thread_id: str, text: str) -> None:
         mapping = self.registry.find_by_thread(thread_id) if self.registry else None

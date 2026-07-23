@@ -145,8 +145,16 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         await self.rpc.events.put(
             {
-                "method": "item/agentMessage/delta",
-                "params": {"threadId": "thread-1", "turnId": "turn-new", "delta": "hi"},
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "type": "agentMessage",
+                        "phase": "final_answer",
+                        "text": "hi",
+                    },
+                },
             }
         )
         await self.rpc.events.put(
@@ -163,6 +171,62 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("end_turn", result["stopReason"])
         turn_start = next(params for method, params in self.rpc.calls if method == "turn/start")
         self.assertNotIn("responsesapiClientMetadata", turn_start)
+
+    async def test_prompt_emits_only_completed_final_answer(self):
+        output = []
+
+        async def emit(event):
+            output.append(event)
+
+        task = asyncio.create_task(
+            self.backend.prompt("thread-1", "hello", "cc_connect", emit)
+        )
+        await asyncio.sleep(0)
+        await self.rpc.events.put(
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "id": "commentary-1",
+                        "type": "agentMessage",
+                        "phase": "commentary",
+                        "text": "working",
+                    },
+                },
+            }
+        )
+        await self.rpc.events.put(
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "id": "final-1",
+                        "type": "agentMessage",
+                        "phase": "final_answer",
+                        "text": "finished",
+                    },
+                },
+            }
+        )
+        await self.rpc.events.put(
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-new", "status": "completed"},
+                },
+            }
+        )
+
+        result = await asyncio.wait_for(task, 1)
+        self.assertEqual(
+            [{"kind": "text", "text": "finished"}], output
+        )
+        self.assertEqual("end_turn", result["stopReason"])
 
     async def test_active_turn_uses_steer(self):
         self.backend.active_turns["thread-1"] = "turn-active"

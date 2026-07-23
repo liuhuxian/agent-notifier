@@ -113,6 +113,8 @@ class CodexBackend:
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers[thread_id].append(queue)
         input_items = [{"type": "text", "text": text, "text_elements": []}]
+        final_text: str | None = None
+        fallback_text: str | None = None
         try:
             active_turn = self.active_turns.get(thread_id)
             if active_turn:
@@ -141,16 +143,28 @@ class CodexBackend:
                 params = event.get("params") or {}
                 if params.get("turnId") not in {None, turn_id}:
                     continue
-                if event.get("method") == "item/agentMessage/delta":
-                    delta = params.get("delta")
-                    if delta:
-                        await emit({"kind": "text", "text": delta})
+                if event.get("method") == "item/completed":
+                    item = params.get("item") or {}
+                    if item.get("type") != "agentMessage":
+                        continue
+                    item_text = item.get("text")
+                    if not item_text:
+                        continue
+                    if item.get("phase") == "final_answer":
+                        final_text = item_text
+                    elif item.get("phase") is None:
+                        fallback_text = item_text
                 elif event.get("method") == "turn/completed":
                     turn = params.get("turn") or {}
                     if turn.get("id") != turn_id:
                         continue
                     status = turn.get("status")
                     if status == "completed":
+                        response_text = final_text or fallback_text
+                        if response_text:
+                            await emit(
+                                {"kind": "text", "text": response_text}
+                            )
                         return {"stopReason": "end_turn"}
                     error = turn.get("error") or {}
                     message = error.get("message")

@@ -89,31 +89,6 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("结果：\n任务执行完成", message)
             service.registry.close()
 
-    async def test_remote_completion_sends_only_final_text(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = make_paths(Path(tmp))
-            paths.ensure_directories()
-            service = SharedService(paths)
-            service.registry = SessionRegistry(paths.state_db)
-            service.registry.bind(
-                "cc_connect",
-                "le-wm-codex",
-                "feishu:chat:user",
-                "019e81c0-c415",
-                "/users/huxian/project/le-wm",
-            )
-            service._send_to_mapping = AsyncMock()
-
-            await service._notify_remote_completion(
-                "019e81c0-c415", "飞书最终回复"
-            )
-
-            self.assertEqual(
-                "飞书最终回复",
-                service._send_to_mapping.await_args.args[1],
-            )
-            service.registry.close()
-
     async def test_remote_progress_sends_complete_commentary_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
