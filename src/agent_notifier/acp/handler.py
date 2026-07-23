@@ -18,6 +18,9 @@ class AgentBackend(Protocol):
         origin: str,
         emit: Callable[[dict], Awaitable[None]],
     ) -> dict: ...
+    def resolve_active_thread(
+        self, project: str, external_key: str, fallback: str
+    ) -> str: ...
     async def cancel(self, thread_id: str) -> None: ...
 
 
@@ -69,9 +72,12 @@ class ACPHandler:
             )
             return {"sessionId": self.session_id}
         if method == "session/prompt":
-            session_id = params.get("sessionId") or self.session_id
-            if not session_id:
+            cc_session_id = params.get("sessionId") or self.session_id
+            if not cc_session_id:
                 raise ACPMethodError(-32602, "session is not initialized")
+            target_thread_id = self.backend.resolve_active_thread(
+                self.project, self.external_key, cc_session_id
+            )
             text = "".join(
                 block.get("text", "")
                 for block in params.get("prompt", [])
@@ -83,7 +89,7 @@ class ACPHandler:
                     await self.emit(
                         "session/update",
                         {
-                            "sessionId": session_id,
+                            "sessionId": cc_session_id,
                             "update": {
                                 "sessionUpdate": "agent_message_chunk",
                                 "content": {"type": "text", "text": event["text"]},
@@ -92,11 +98,14 @@ class ACPHandler:
                     )
 
             return await self.backend.prompt(
-                session_id, text, "cc_connect", emit_backend
+                target_thread_id, text, "cc_connect", emit_backend
             )
         if method == "session/cancel":
-            session_id = params.get("sessionId") or self.session_id
-            if session_id:
-                await self.backend.cancel(session_id)
+            cc_session_id = params.get("sessionId") or self.session_id
+            if cc_session_id:
+                target_thread_id = self.backend.resolve_active_thread(
+                    self.project, self.external_key, cc_session_id
+                )
+                await self.backend.cancel(target_thread_id)
             return {}
         raise ACPMethodError(-32601, f"method not implemented: {method}")

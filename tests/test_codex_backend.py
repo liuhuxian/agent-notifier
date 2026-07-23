@@ -57,6 +57,36 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("thread-old", thread_id)
         mapping = self.registry.get("cc_connect", "le-wm", "feishu:one")
         self.assertEqual("thread-old", mapping.thread_id)
+        self.assertEqual(
+            "feishu:one",
+            self.registry.find_by_thread("thread-old").external_key,
+        )
+
+    async def test_switching_active_session_keeps_previous_thread_notifications(self):
+        await self.backend.resume_thread(
+            "thread-old", "/workspace", "le-wm", "feishu:one"
+        )
+        await self.backend.resume_thread(
+            "thread-new", "/workspace", "le-wm", "feishu:one"
+        )
+
+        active = self.registry.get("cc_connect", "le-wm", "feishu:one")
+        self.assertEqual("thread-new", active.thread_id)
+        self.assertEqual(
+            "feishu:one",
+            self.registry.find_by_thread("thread-old").external_key,
+        )
+
+    async def test_resolve_active_thread_prefers_registry_target(self):
+        self.registry.bind(
+            "cc_connect", "le-wm", "feishu:one", "thread-active", "/workspace"
+        )
+        self.assertEqual(
+            "thread-active",
+            self.backend.resolve_active_thread(
+                "le-wm", "feishu:one", "thread-fallback"
+            ),
+        )
 
     async def test_prompt_streams_until_matching_turn_completes(self):
         output = []

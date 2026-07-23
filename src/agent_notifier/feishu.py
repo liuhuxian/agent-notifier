@@ -46,18 +46,6 @@ def load_feishu_settings(
     return settings
 
 
-def _after_click(label: str, approval_id: str) -> dict[str, str]:
-    return {
-        "title": f"已选择{label}",
-        "color": "green" if label == "允许" else "red",
-        "markdown": (
-            f"审批请求 `{approval_id}`\n\n"
-            f"你的选择：**{label}**\n\n"
-            "操作已提交给 Codex。"
-        ),
-    }
-
-
 def build_approval_card(
     approval_id: str,
     reason: str,
@@ -72,7 +60,6 @@ def build_approval_card(
             "value": {
                 "action": f"cmd:{command} {approval_id}",
                 "session_key": session_key,
-                "after_click": _after_click(label, approval_id),
             },
         }
 

@@ -10,12 +10,15 @@ from agent_notifier.proxy import AppServerProxy
 from agent_notifier.proxy import ApprovalFanout
 from agent_notifier.approvals import ApprovalStore
 from agent_notifier.codex.client import CodexAppServerClient
+from agent_notifier.routing import ClientEventHub
 
 
 class FakeUpstream:
     def __init__(self, socket_path):
         self.socket_path = socket_path
         self.runner = None
+        self.connections = []
+        self.approval_responses = []
 
     async def start(self):
         app = web.Application()
@@ -27,9 +30,72 @@ class FakeUpstream:
     async def websocket(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        self.connections.append(ws)
         async for message in ws:
             payload = json.loads(message.data)
+            if "method" not in payload:
+                self.approval_responses.append(payload)
+                if payload.get("id") == 42:
+                    await ws.send_json(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "serverRequest/resolved",
+                            "params": {
+                                "threadId": "thread-1",
+                                "requestId": 42,
+                            },
+                        }
+                    )
+                continue
             if "id" not in payload:
+                continue
+            if payload["method"] == "thread/resume":
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "thread": {
+                                "id": payload["params"]["threadId"],
+                            }
+                        },
+                    }
+                )
+                continue
+            if payload["method"] == "turn/start":
+                thread_id = payload["params"]["threadId"]
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {"turn": {"id": "turn-remote"}},
+                    }
+                )
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "turn/started",
+                        "params": {
+                            "threadId": thread_id,
+                            "turn": {"id": "turn-remote", "status": "inProgress"},
+                        },
+                    }
+                )
+                await ws.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "item/started",
+                        "params": {
+                            "threadId": thread_id,
+                            "turnId": "turn-remote",
+                            "item": {
+                                "id": "user-remote",
+                                "type": "userMessage",
+                                "content": [{"type": "text", "text": "remote task"}],
+                            },
+                        },
+                    }
+                )
                 continue
             if payload["method"] == "test/large":
                 await ws.send_json(
@@ -44,6 +110,27 @@ class FakeUpstream:
                 {"jsonrpc": "2.0", "id": payload["id"], "result": {"method": payload["method"]}}
             )
         return ws
+
+    async def send_approval(self):
+        for _ in range(20):
+            if self.connections:
+                break
+            await asyncio.sleep(0.01)
+        if not self.connections:
+            raise RuntimeError("no upstream connection")
+        await self.connections[0].send_json(
+            {
+                "jsonrpc": "2.0",
+                "id": 42,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": "command-1",
+                    "command": "touch /tmp/test",
+                },
+            }
+        )
 
     async def close(self):
         if self.runner:
@@ -144,6 +231,86 @@ class ApprovalFanoutTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class ClientEventHubTest(unittest.IsolatedAsyncioTestCase):
+    async def test_notification_is_scoped_to_subscribed_thread(self):
+        hub = ClientEventHub()
+        first = RecordingSocket()
+        second = RecordingSocket()
+        await hub.add_client("terminal:first", first)
+        await hub.add_client("terminal:second", second)
+        await hub.subscribe("terminal:first", "thread-1")
+        await hub.subscribe("terminal:second", "thread-2")
+
+        await hub.route_notification(
+            {
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-1"},
+                },
+            },
+            "terminal:first",
+        )
+
+        self.assertEqual(1, len(first.messages))
+        self.assertEqual([], second.messages)
+
+    async def test_duplicate_turn_stream_from_second_upstream_is_suppressed(self):
+        hub = ClientEventHub()
+        terminal = RecordingSocket()
+        remote = RecordingSocket()
+        await hub.add_client("terminal", terminal)
+        await hub.add_client("remote", remote)
+        await hub.subscribe("terminal", "thread-1")
+        await hub.subscribe("remote", "thread-1")
+        event = {
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "delta": "same chunk",
+            },
+        }
+
+        self.assertTrue(await hub.route_notification(event, "remote"))
+        self.assertFalse(await hub.route_notification(event, "terminal"))
+
+        self.assertEqual(1, len(terminal.messages))
+        self.assertEqual(1, len(remote.messages))
+
+    async def test_remaining_client_takes_over_stream_after_source_disconnects(self):
+        hub = ClientEventHub()
+        terminal = RecordingSocket()
+        remote = RecordingSocket()
+        await hub.add_client("terminal", terminal)
+        await hub.add_client("remote", remote)
+        await hub.subscribe("terminal", "thread-1")
+        await hub.subscribe("remote", "thread-1")
+        first = {
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "delta": "before",
+            },
+        }
+        second = {
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "delta": "after",
+            },
+        }
+
+        self.assertTrue(await hub.route_notification(first, "terminal"))
+        await hub.remove_client("terminal")
+        self.assertTrue(await hub.route_notification(second, "remote"))
+        self.assertEqual(["before", "after"], [
+            message["params"]["delta"] for message in remote.messages
+        ])
+
+
 class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -213,6 +380,81 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(200, response.status)
             self.assertEqual("resolved", (await response.json())["status"])
         self.assertEqual({"decision": "accept"}, upstream.messages[0]["result"])
+
+    async def test_external_approval_rewrites_resolved_request_for_terminal(self):
+        terminal = await self.session.ws_connect("http://localhost/?client=terminal")
+        try:
+            await self.upstream.send_approval()
+            approval = await terminal.receive_json()
+            token = approval["id"]
+
+            async with self.session.post(
+                "http://localhost/approval",
+                json={
+                    "approval_id": token.rsplit(":", 1)[-1][:10],
+                    "decision": "allow",
+                },
+            ) as response:
+                self.assertEqual(200, response.status)
+
+            resolved = await terminal.receive_json()
+            self.assertEqual("serverRequest/resolved", resolved["method"])
+            self.assertEqual(token, resolved["params"]["requestId"])
+        finally:
+            await terminal.close()
+
+    async def test_remote_turn_events_reach_terminal_on_same_thread(self):
+        terminal = await self.session.ws_connect("http://localhost/?client=terminal")
+        remote = await self.session.ws_connect("http://localhost/?client=cc_connect")
+        try:
+            await terminal.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 20,
+                    "method": "thread/resume",
+                    "params": {"threadId": "thread-1"},
+                }
+            )
+            self.assertEqual(20, (await terminal.receive_json())["id"])
+            await remote.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 21,
+                    "method": "thread/resume",
+                    "params": {"threadId": "thread-1"},
+                }
+            )
+            self.assertEqual(21, (await remote.receive_json())["id"])
+
+            await remote.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 22,
+                    "method": "turn/start",
+                    "params": {
+                        "threadId": "thread-1",
+                        "input": [{"type": "text", "text": "remote task"}],
+                    },
+                }
+            )
+            self.assertEqual(22, (await remote.receive_json())["id"])
+            try:
+                started = await asyncio.wait_for(
+                    terminal.receive_json(), timeout=0.2
+                )
+            except asyncio.TimeoutError:
+                self.fail("terminal did not receive the remote turn notification")
+            self.assertEqual("turn/started", started["method"])
+            self.assertEqual("thread-1", started["params"]["threadId"])
+
+            item = await terminal.receive_json()
+            self.assertEqual("item/started", item["method"])
+            self.assertEqual(
+                "remote task", item["params"]["item"]["content"][0]["text"]
+            )
+        finally:
+            await remote.close()
+            await terminal.close()
 
     async def test_terminal_completion_notifies_once_but_cc_completion_does_not(self):
         notifications = []

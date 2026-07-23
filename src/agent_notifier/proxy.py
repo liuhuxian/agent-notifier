@@ -16,6 +16,7 @@ from aiohttp import ClientSession, UnixConnector, WSMsgType, web
 
 from .approvals import ApprovalAlreadyResolved, ApprovalStore
 from .policy import should_send_completion_notification
+from .routing import ClientEventHub
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class PendingApproval:
     original_id: object
     request: dict
     resolved: bool = False
+    resolution_notified: bool = False
 
 
 def approval_short_id(token: str) -> str:
@@ -63,27 +65,33 @@ def approval_result(request: dict, decision: str) -> dict:
 
 
 class ApprovalFanout:
-    def __init__(self, store: ApprovalStore | None = None):
-        self.clients: dict[str, web.WebSocketResponse] = {}
+    def __init__(
+        self,
+        store: ApprovalStore | None = None,
+        event_hub: ClientEventHub | None = None,
+    ):
+        self.event_hub = event_hub or ClientEventHub()
         self.pending: dict[str, PendingApproval] = {}
         self.lock = asyncio.Lock()
         self.store = store
 
     async def add_client(self, client_id: str, ws: web.WebSocketResponse) -> None:
-        async with self.lock:
-            self.clients[client_id] = ws
+        await self.event_hub.add_client(client_id, ws)
 
     async def remove_client(self, client_id: str) -> None:
-        async with self.lock:
-            self.clients.pop(client_id, None)
+        await self.event_hub.remove_client(client_id)
 
-    async def publish(self, message: dict, upstream) -> str:
+    async def publish(
+        self,
+        message: dict,
+        upstream,
+        source_client_id: str | None = None,
+    ) -> str:
         token = f"agent-notifier-approval:{uuid.uuid4()}"
         routed = dict(message)
         routed["id"] = token
         async with self.lock:
             self.pending[token] = PendingApproval(upstream, message["id"], message)
-            clients = list(self.clients.values())
         if self.store:
             params = message.get("params") or {}
             self.store.register(
@@ -92,10 +100,42 @@ class ApprovalFanout:
                 message.get("method") or "approval",
                 message,
             )
-        for client in clients:
-            if not client.closed:
-                await client.send_json(routed)
+        thread_id = (message.get("params") or {}).get("threadId")
+        await self.event_hub.broadcast(routed, thread_id, source_client_id)
         return token
+
+    async def route_upstream_resolution(
+        self, message: dict, upstream: object
+    ) -> bool:
+        if message.get("method") != "serverRequest/resolved":
+            return False
+        params = message.get("params") or {}
+        original_id = params.get("requestId")
+        async with self.lock:
+            match = next(
+                (
+                    (token, pending)
+                    for token, pending in self.pending.items()
+                    if pending.upstream is upstream
+                    and pending.original_id == original_id
+                ),
+                None,
+            )
+            if match is None:
+                return False
+            token, pending = match
+            if pending.resolution_notified:
+                return True
+            pending.resolved = True
+            pending.resolution_notified = True
+            thread_id = (pending.request.get("params") or {}).get("threadId")
+        routed = dict(message)
+        routed["params"] = dict(params)
+        routed["params"]["requestId"] = token
+        if thread_id and not routed["params"].get("threadId"):
+            routed["params"]["threadId"] = thread_id
+        await self.event_hub.broadcast(routed, thread_id)
+        return True
 
     async def _claim(
         self, token: str, decision: str, resolved_by: str
@@ -193,7 +233,8 @@ class AppServerProxy:
     ):
         self.listen_socket = Path(listen_socket)
         self.upstream_socket = Path(upstream_socket)
-        self.fanout = ApprovalFanout(approval_store)
+        self.event_hub = ClientEventHub()
+        self.fanout = ApprovalFanout(approval_store, self.event_hub)
         self.runner: web.AppRunner | None = None
         self.on_terminal_completion = on_terminal_completion
         self.on_approval_request = on_approval_request
@@ -249,6 +290,7 @@ class AppServerProxy:
             upstream = await session.ws_connect(
                 "http://localhost/", heartbeat=30, max_msg_size=0
             )
+            pending_request_methods: dict[object, str] = {}
 
             async def downstream_to_upstream() -> None:
                 message_type = None
@@ -265,6 +307,11 @@ class AppServerProxy:
                             request_id = payload.get("id")
                         if await self.fanout.resolve(payload, client_kind):
                             continue
+                        await self.event_hub.subscribe_from_request(
+                            client_id, payload
+                        )
+                        if "id" in payload and payload.get("method"):
+                            pending_request_methods[payload["id"]] = payload["method"]
                         if payload.get("method") in {"turn/start", "turn/steer"}:
                             thread_id = (payload.get("params") or {}).get("threadId")
                             if thread_id:
@@ -292,8 +339,17 @@ class AppServerProxy:
                         if isinstance(payload, dict):
                             method = payload.get("method")
                             request_id = payload.get("id")
+                        if "method" not in payload and "id" in payload:
+                            request_method = pending_request_methods.pop(
+                                payload["id"], None
+                            )
+                            await self.event_hub.subscribe_from_response(
+                                client_id, request_method, payload
+                            )
                         if payload.get("method") in APPROVAL_METHODS and "id" in payload:
-                            token = await self.fanout.publish(payload, upstream)
+                            token = await self.fanout.publish(
+                                payload, upstream, client_id
+                            )
                             if self.on_approval_request:
                                 try:
                                     await self.on_approval_request(token, payload)
@@ -303,9 +359,18 @@ class AppServerProxy:
                                         "approval=%s",
                                         approval_short_id(token),
                                     )
+                        elif await self.fanout.route_upstream_resolution(
+                            payload, upstream
+                        ):
+                            continue
                         else:
-                            await self._observe_notification(payload, client_kind)
-                            if not downstream.closed:
+                            if payload.get("method"):
+                                routed = await self.event_hub.route_notification(
+                                    payload, client_id
+                                )
+                                if routed:
+                                    await self._observe_notification(payload)
+                            elif not downstream.closed:
                                 await downstream.send_json(payload)
                 except Exception:
                     logger.exception(

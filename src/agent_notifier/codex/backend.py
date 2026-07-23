@@ -69,6 +69,12 @@ class CodexBackend:
         self.registry.bind("cc_connect", project, external_key, resumed_id, cwd)
         return resumed_id
 
+    def resolve_active_thread(
+        self, project: str, external_key: str, fallback: str
+    ) -> str:
+        mapping = self.registry.get("cc_connect", project, external_key)
+        return mapping.thread_id if mapping else fallback
+
     async def prompt(
         self,
         thread_id: str,

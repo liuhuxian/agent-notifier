@@ -1,4 +1,4 @@
-"""Persistent external-session to agent-thread mappings."""
+"""Persistent active-session routes and notification subscriptions."""
 
 from __future__ import annotations
 
@@ -36,6 +36,29 @@ class SessionRegistry:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_subscriptions (
+                adapter TEXT NOT NULL,
+                project TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (adapter, project, external_key, thread_id)
+            )
+            """
+        )
+        # Existing installations used session_mappings for both purposes.
+        # Preserve every current active route as its first notification subscription.
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO notification_subscriptions
+                (adapter, project, external_key, thread_id, cwd, updated_at)
+            SELECT adapter, project, external_key, thread_id, cwd, updated_at
+            FROM session_mappings
+            """
+        )
         self._conn.commit()
 
     def bind(
@@ -59,6 +82,9 @@ class SessionRegistry:
                 """,
                 (adapter, project, external_key, thread_id, cwd),
             )
+            self._subscribe_locked(
+                adapter, project, external_key, thread_id, cwd
+            )
             row = self._conn.execute(
                 """
                 SELECT adapter, project, external_key, thread_id, cwd
@@ -68,6 +94,41 @@ class SessionRegistry:
                 (adapter, project, external_key),
             ).fetchone()
         return SessionMapping(*row)
+
+    def subscribe(
+        self,
+        adapter: str,
+        project: str,
+        external_key: str,
+        thread_id: str,
+        cwd: str,
+    ) -> SessionMapping:
+        """Subscribe a thread to notifications without changing the active route."""
+        with self._lock, self._conn:
+            self._subscribe_locked(
+                adapter, project, external_key, thread_id, cwd
+            )
+        return SessionMapping(adapter, project, external_key, thread_id, cwd)
+
+    def _subscribe_locked(
+        self,
+        adapter: str,
+        project: str,
+        external_key: str,
+        thread_id: str,
+        cwd: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO notification_subscriptions
+                (adapter, project, external_key, thread_id, cwd)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(adapter, project, external_key, thread_id) DO UPDATE SET
+                cwd = excluded.cwd,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (adapter, project, external_key, thread_id, cwd),
+        )
 
     def get(self, adapter: str, project: str, external_key: str) -> SessionMapping | None:
         with self._lock:
@@ -86,7 +147,7 @@ class SessionRegistry:
             row = self._conn.execute(
                 """
                 SELECT adapter, project, external_key, thread_id, cwd
-                FROM session_mappings
+                FROM notification_subscriptions
                 WHERE thread_id = ?
                 ORDER BY updated_at DESC
                 LIMIT 1
@@ -94,6 +155,48 @@ class SessionRegistry:
                 (thread_id,),
             ).fetchone()
         return SessionMapping(*row) if row else None
+
+    def list_subscriptions(
+        self,
+        adapter: str,
+        project: str | None = None,
+        external_key: str | None = None,
+    ) -> list[SessionMapping]:
+        clauses = ["adapter = ?"]
+        values: list[str] = [adapter]
+        if project is not None:
+            clauses.append("project = ?")
+            values.append(project)
+        if external_key is not None:
+            clauses.append("external_key = ?")
+            values.append(external_key)
+        query = f"""
+            SELECT adapter, project, external_key, thread_id, cwd
+            FROM notification_subscriptions
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC
+        """
+        with self._lock:
+            rows = self._conn.execute(query, values).fetchall()
+        return [SessionMapping(*row) for row in rows]
+
+    def list_subscriptions_by_thread(
+        self, thread_id: str, project: str | None = None
+    ) -> list[SessionMapping]:
+        clauses = ["thread_id = ?"]
+        values: list[str] = [thread_id]
+        if project is not None:
+            clauses.append("project = ?")
+            values.append(project)
+        query = f"""
+            SELECT adapter, project, external_key, thread_id, cwd
+            FROM notification_subscriptions
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC
+        """
+        with self._lock:
+            rows = self._conn.execute(query, values).fetchall()
+        return [SessionMapping(*row) for row in rows]
 
     def list_routes(
         self, adapter: str, project: str | None = None

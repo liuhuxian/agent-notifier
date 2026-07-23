@@ -67,13 +67,19 @@ def _configure_approval_commands(source: str, command: str) -> str:
         source,
         "codex-approve",
         "Approve a pending Codex permission request",
-        f"{command} decide --quiet allow {{{{1}}}}",
+        f"{command} decide allow {{{{1}}}}",
     )
-    return _upsert_command(
+    source = _upsert_command(
         source,
         "codex-deny",
         "Deny a pending Codex permission request",
-        f"{command} decide --quiet deny {{{{1}}}}",
+        f"{command} decide deny {{{{1}}}}",
+    )
+    return _upsert_command(
+        source,
+        "codex-switch",
+        "Route future Feishu tasks to a subscribed Codex thread",
+        f"{command} activate {{{{1}}}}",
     )
 
 

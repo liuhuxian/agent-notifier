@@ -61,12 +61,48 @@ def bind_terminal_thread(
                 f"(projects: {projects}); specify --notify-project"
             )
         route = routes[0]
-        return registry.bind(
+        return registry.subscribe(
             route.adapter,
             route.project,
             route.external_key,
             thread_id,
             cwd or route.cwd,
+        )
+    finally:
+        registry.close()
+
+
+def activate_terminal_thread(
+    paths: Paths,
+    thread_id: str,
+    project: str | None = None,
+):
+    """Select one subscribed thread as the target for incoming chat tasks."""
+    registry = SessionRegistry(paths.state_db)
+    try:
+        subscriptions = registry.list_subscriptions_by_thread(
+            thread_id, project=project
+        )
+        if not subscriptions:
+            scope = f" in project {project!r}" if project else ""
+            raise ValueError(
+                f"thread {thread_id!r} has no Feishu notification subscription{scope}"
+            )
+        if len(subscriptions) > 1:
+            projects = ", ".join(
+                sorted({subscription.project for subscription in subscriptions})
+            )
+            raise ValueError(
+                f"thread {thread_id!r} has multiple Feishu subscriptions "
+                f"(projects: {projects}); specify --project"
+            )
+        route = subscriptions[0]
+        return registry.bind(
+            route.adapter,
+            route.project,
+            route.external_key,
+            route.thread_id,
+            route.cwd,
         )
     finally:
         registry.close()
@@ -89,10 +125,21 @@ def approval_decision_message(
     status: str, decision: str, approval_id: str, quiet: bool
 ) -> str | None:
     if status == "already_resolved":
-        return f"审批已经被处理：{approval_id}"
+        return (
+            "<text_tag color='orange'>**⚠️ 审批已经被其他端处理**</text_tag>\n\n"
+            f"请求 ID：`{approval_id}`"
+        )
     if quiet:
         return None
-    return f"approval {decision}: {approval_id}"
+    if decision == "allow":
+        return (
+            "<text_tag color='green'>**✅ 已允许 Codex 权限请求**</text_tag>\n\n"
+            f"请求 ID：`{approval_id}`"
+        )
+    return (
+        "<text_tag color='red'>**❌ 已拒绝 Codex 权限请求**</text_tag>\n\n"
+        f"请求 ID：`{approval_id}`"
+    )
 
 
 def _run_version(command: list[str]) -> str:
@@ -274,6 +321,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bind.add_argument("thread_id")
     bind.add_argument("--project", required=True)
+    activate = sub.add_parser(
+        "activate", help="select a subscribed Codex thread for incoming chat tasks"
+    )
+    activate.add_argument("thread_id")
+    activate.add_argument("--project")
     decide = sub.add_parser(
         "decide", help="resolve a pending Codex approval request"
     )
@@ -347,6 +399,13 @@ def main() -> None:
                 cwd=os.getcwd(),
             )
             print(f"bound: {mapping.project} <- {mapping.thread_id}")
+        elif args.command == "activate":
+            mapping = activate_terminal_thread(
+                paths,
+                args.thread_id,
+                project=args.project,
+            )
+            print(f"active: {mapping.project} -> {mapping.thread_id}")
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(

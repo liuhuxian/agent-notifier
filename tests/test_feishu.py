@@ -6,7 +6,7 @@ from agent_notifier.feishu import build_approval_card, load_feishu_settings
 
 
 class FeishuCardTest(unittest.TestCase):
-    def test_buttons_execute_commands_and_replace_card_after_click(self):
+    def test_buttons_execute_real_approval_commands_without_replacing_card(self):
         card = build_approval_card(
             approval_id="1234567890",
             reason="需要权限",
@@ -21,12 +21,8 @@ class FeishuCardTest(unittest.TestCase):
         self.assertEqual(
             "cmd:/codex-deny 1234567890", deny["value"]["action"]
         )
-        self.assertEqual("green", allow["value"]["after_click"]["color"])
-        self.assertIn(
-            "你的选择：**允许**",
-            allow["value"]["after_click"]["markdown"],
-        )
-        self.assertEqual("red", deny["value"]["after_click"]["color"])
+        self.assertNotIn("after_click", allow["value"])
+        self.assertNotIn("after_click", deny["value"])
         self.assertEqual("feishu:chat:user", allow["value"]["session_key"])
 
     def test_project_feishu_credentials_are_loaded(self):

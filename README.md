@@ -49,10 +49,14 @@ agent-notifier doctor
 - cc-connect 通过官方 `type = "acp"` 接入，不修改 cc-connect 源码或二进制。
 - cc-connect 创建或加载的 ACP session 会保存对应的 Codex thread ID。
 - 纯终端启动或恢复的 Codex thread 不会自动出现在 cc-connect 的 `/list` 中；
-  Agent Notifier 会单独维护终端 thread 的飞书通知路由。
+  Agent Notifier 会为每个终端 thread 单独保存飞书通知订阅。
+- 一个飞书聊天可以同时订阅多个终端 thread 的审批和完成通知，但只维护一个
+  active thread 作为普通任务目标；切换任务目标不会取消其他 thread 的通知。
 - 活动 turn 收到飞书消息时使用 `turn/steer`，不会并发启动另一个竞争 turn。
 - 权限请求会显示在终端，并主动推送到绑定的飞书会话；第一份有效响应生效，
   晚到响应会提示已经处理。
+- 飞书向已绑定 thread 提交任务时，同一 thread 的已打开终端会同步显示
+  `turn/*`、`item/*` 和工具执行进度；普通 JSON-RPC 响应仍只返回原请求方。
 - 飞书发起的 turn 直接收到正常回复，不再额外发送重复的“完成”通知。
 
 ## 安装
@@ -155,6 +159,10 @@ cc-connect daemon restart
 机器人会明确回复 `审批已经被处理：<审批ID>`。交互卡片发送失败时会自动降级为
 包含上述两个命令的纯文本消息。
 
+当飞书先处理审批时，代理会把 App Server 的 `serverRequest/resolved` 通知重写为
+终端所见的审批 ID，并广播到同一 thread。终端会关闭旧审批界面，后续审批不会被
+旧请求阻塞。
+
 恢复最近一次备份：
 
 ```bash
@@ -177,18 +185,34 @@ agent-notifier codex resume <THREAD_ID>
 agent-notifier codex -C /path/to/project
 ```
 
-恢复已有 thread 时，如果注册表中只有一个飞书路由，Agent Notifier 会自动将
-该 thread 绑定到该路由。存在多个飞书路由时必须指定项目，避免误发通知：
+恢复已有 thread 时，如果注册表中只有一个飞书路由，Agent Notifier 会自动为
+该 thread 添加通知订阅，不会改变飞书当前的普通任务目标。存在多个飞书路由时
+必须指定项目，避免误发通知：
 
 ```bash
 agent-notifier codex --notify-project le-wm-codex resume <THREAD_ID>
 ```
 
-也可以只更新绑定而不启动 TUI：
+也可以只添加通知订阅而不启动 TUI：
 
 ```bash
 agent-notifier bind <THREAD_ID> --project le-wm-codex
 ```
+
+从飞书选择后续普通任务要发送到哪个已订阅 thread：
+
+```text
+/codex-switch <THREAD_ID>
+```
+
+也可以在本机切换：
+
+```bash
+agent-notifier activate <THREAD_ID> --project le-wm-codex
+```
+
+该操作只改变 active task target。其他已订阅 thread 的权限审批、完成和失败通知
+仍会继续发送到同一个飞书聊天。
 
 本机也可以直接处理一个仍在等待的审批：
 
@@ -217,7 +241,7 @@ systemctl --user restart agent-notifier
 
 这些命令只管理 cc-connect 自己创建或加载的 ACP session，不会列出所有 Codex
 历史 thread。终端恢复的 thread 应通过上述自动绑定或 `agent-notifier bind`
-关联飞书通知路由。
+关联飞书通知路由；使用 `/codex-switch` 在这些终端 thread 之间切换任务目标。
 
 ## 卸载
 

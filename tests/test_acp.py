@@ -27,6 +27,9 @@ class FakeBackend:
         await emit({"kind": "text", "text": "world"})
         return {"stopReason": "end_turn"}
 
+    def resolve_active_thread(self, project, external_key, fallback):
+        return getattr(self, "active_thread", None) or fallback
+
     async def cancel(self, thread_id):
         return None
 
@@ -74,6 +77,22 @@ class ACPHandlerTest(unittest.IsolatedAsyncioTestCase):
         chunks = [p["update"]["content"]["text"] for m, p in self.events]
         self.assertEqual(["hello ", "world"], chunks)
         self.assertEqual([("thread-old", "go", "cc_connect")], self.backend.prompts)
+
+    async def test_prompt_uses_active_target_but_keeps_cc_session_for_updates(self):
+        await self.handler.request("session/load", {"sessionId": "thread-cc"})
+        self.backend.active_thread = "thread-terminal"
+        await self.handler.request(
+            "session/prompt",
+            {"sessionId": "thread-cc", "prompt": [{"type": "text", "text": "go"}]},
+        )
+        self.assertEqual(
+            [("thread-terminal", "go", "cc_connect")],
+            self.backend.prompts,
+        )
+        self.assertEqual(
+            {"thread-cc"},
+            {params["sessionId"] for _, params in self.events},
+        )
 
     async def test_codex_approval_round_trips_through_cc_connect(self):
         output = io.StringIO()

@@ -46,7 +46,7 @@ class RegistryTest(unittest.TestCase):
             self.assertEqual(mapping, second.find_by_thread("thread-1"))
             second.close()
 
-    def test_new_session_replaces_mapping_for_same_external_key(self):
+    def test_new_active_session_keeps_both_notification_subscriptions(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "state.sqlite3"
             registry = SessionRegistry(db)
@@ -56,8 +56,36 @@ class RegistryTest(unittest.TestCase):
             )
             self.assertEqual("thread-new", replaced.thread_id)
             self.assertEqual("/new", replaced.cwd)
-            self.assertIsNone(registry.find_by_thread("thread-old"))
+            self.assertEqual("same", registry.find_by_thread("thread-old").external_key)
+            self.assertEqual("same", registry.find_by_thread("thread-new").external_key)
+            self.assertEqual(
+                {"thread-old", "thread-new"},
+                {
+                    route.thread_id
+                    for route in registry.list_subscriptions(
+                        "cc_connect", "le-wm", "same"
+                    )
+                },
+            )
             registry.close()
+
+    def test_existing_active_routes_are_migrated_to_subscriptions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "state.sqlite3"
+            registry = SessionRegistry(db)
+            registry.bind("cc_connect", "le-wm", "feishu:one", "thread-1", "/one")
+            registry.close()
+
+            connection = __import__("sqlite3").connect(db)
+            connection.execute("DELETE FROM notification_subscriptions")
+            connection.commit()
+            connection.close()
+
+            migrated = SessionRegistry(db)
+            self.assertEqual(
+                "feishu:one", migrated.find_by_thread("thread-1").external_key
+            )
+            migrated.close()
 
     def test_routes_can_be_filtered_by_project(self):
         with tempfile.TemporaryDirectory() as tmp:

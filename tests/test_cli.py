@@ -4,6 +4,7 @@ from pathlib import Path
 
 from agent_notifier.cli import (
     _resume_thread_id,
+    activate_terminal_thread,
     approval_decision_message,
     bind_terminal_thread,
     build_parser,
@@ -48,11 +49,19 @@ class CodexBindingTest(unittest.TestCase):
         self.assertEqual("1234567890", args.approval_id)
         self.assertTrue(args.quiet)
 
+    def test_activate_parser_accepts_thread_and_optional_project(self):
+        args = build_parser().parse_args(
+            ["activate", "thread-1", "--project", "le-wm"]
+        )
+        self.assertEqual("thread-1", args.thread_id)
+        self.assertEqual("le-wm", args.project)
+
     def test_quiet_card_callback_reports_already_handled_approval(self):
         message = approval_decision_message(
             "already_resolved", "allow", "1234567890", quiet=True
         )
-        self.assertEqual("审批已经被处理：1234567890", message)
+        self.assertIn("审批已经被其他端处理", message)
+        self.assertIn("`1234567890`", message)
 
     def test_quiet_card_callback_suppresses_normal_success(self):
         self.assertIsNone(
@@ -61,7 +70,31 @@ class CodexBindingTest(unittest.TestCase):
             )
         )
 
-    def test_unique_route_is_rebound_to_resumed_thread(self):
+    def test_allow_result_is_green_card_markdown(self):
+        message = approval_decision_message(
+            "resolved", "allow", "1234567890", quiet=False
+        )
+        self.assertIn("<text_tag color='green'>", message)
+        self.assertIn("已允许 Codex 权限请求", message)
+        self.assertIn("`1234567890`", message)
+
+    def test_deny_result_is_red_card_markdown(self):
+        message = approval_decision_message(
+            "resolved", "deny", "1234567890", quiet=False
+        )
+        self.assertIn("<text_tag color='red'>", message)
+        self.assertIn("已拒绝 Codex 权限请求", message)
+        self.assertIn("`1234567890`", message)
+
+    def test_already_resolved_result_is_orange_card_markdown(self):
+        message = approval_decision_message(
+            "already_resolved", "allow", "1234567890", quiet=False
+        )
+        self.assertIn("<text_tag color='orange'>", message)
+        self.assertIn("审批已经被其他端处理", message)
+        self.assertIn("`1234567890`", message)
+
+    def test_terminal_resume_adds_subscription_without_changing_active_route(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
             paths.ensure_directories()
@@ -78,7 +111,14 @@ class CodexBindingTest(unittest.TestCase):
             self.assertEqual("/new-workspace", mapping.cwd)
 
             registry = SessionRegistry(paths.state_db)
-            self.assertIsNone(registry.find_by_thread("thread-old"))
+            self.assertEqual(
+                "thread-old",
+                registry.get("cc_connect", "le-wm", "feishu:one").thread_id,
+            )
+            self.assertEqual(
+                "feishu:one",
+                registry.find_by_thread("thread-old").external_key,
+            )
             self.assertEqual(
                 "feishu:one",
                 registry.find_by_thread("thread-new").external_key,
@@ -96,6 +136,40 @@ class CodexBindingTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "specify --notify-project"):
                 bind_terminal_thread(paths, "thread-new")
+
+    def test_activate_changes_task_target_without_removing_subscriptions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect", "le-wm", "feishu:one", "thread-old", "/old"
+            )
+            registry.subscribe(
+                "cc_connect", "le-wm", "feishu:one", "thread-new", "/new"
+            )
+            registry.close()
+
+            active = activate_terminal_thread(
+                paths, "thread-new", project="le-wm"
+            )
+            self.assertEqual("thread-new", active.thread_id)
+
+            registry = SessionRegistry(paths.state_db)
+            self.assertEqual(
+                "thread-new",
+                registry.get("cc_connect", "le-wm", "feishu:one").thread_id,
+            )
+            self.assertEqual(
+                {"thread-old", "thread-new"},
+                {
+                    route.thread_id
+                    for route in registry.list_subscriptions(
+                        "cc_connect", "le-wm", "feishu:one"
+                    )
+                },
+            )
+            registry.close()
 
 
 if __name__ == "__main__":
