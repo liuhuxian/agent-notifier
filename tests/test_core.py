@@ -25,6 +25,11 @@ class PolicyTest(unittest.TestCase):
     def test_terminal_turn_sends_completion(self):
         self.assertTrue(should_send_completion_notification("terminal"))
 
+    def test_bootstrap_turn_does_not_send_completion(self):
+        self.assertFalse(
+            should_send_completion_notification("agent-notifier-bootstrap")
+        )
+
 
 class RegistryTest(unittest.TestCase):
     def test_mapping_is_stable_across_registry_instances(self):

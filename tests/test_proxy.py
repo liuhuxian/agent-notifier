@@ -111,14 +111,16 @@ class FakeUpstream:
             )
         return ws
 
-    async def send_approval(self):
+    async def send_approval(self, connection_index=0):
         for _ in range(20):
-            if self.connections:
+            if len(self.connections) > connection_index:
                 break
             await asyncio.sleep(0.01)
-        if not self.connections:
-            raise RuntimeError("no upstream connection")
-        await self.connections[0].send_json(
+        if len(self.connections) <= connection_index:
+            raise RuntimeError(
+                f"upstream connection {connection_index} is unavailable"
+            )
+        await self.connections[connection_index].send_json(
             {
                 "jsonrpc": "2.0",
                 "id": 42,
@@ -310,6 +312,47 @@ class ClientEventHubTest(unittest.IsolatedAsyncioTestCase):
             message["params"]["delta"] for message in remote.messages
         ])
 
+    async def test_registered_turn_owner_wins_before_first_event_arrives(self):
+        hub = ClientEventHub()
+        terminal = RecordingSocket()
+        cc_connect = RecordingSocket()
+        await hub.add_client("terminal:one", terminal)
+        await hub.add_client("cc_connect:one", cc_connect)
+        await hub.subscribe("terminal:one", "thread-1")
+        await hub.subscribe("cc_connect:one", "thread-1")
+        await hub.register_turn_request(
+            "thread-1", "cc_connect:one", "turn/start"
+        )
+        event = {
+            "method": "turn/started",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1"},
+            },
+        }
+
+        self.assertFalse(
+            await hub.route_notification(event, "terminal:one")
+        )
+        self.assertTrue(
+            await hub.route_notification(event, "cc_connect:one")
+        )
+        completed = {
+            "method": "turn/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "status": "completed"},
+            },
+        }
+        self.assertFalse(
+            await hub.route_notification(completed, "terminal:one")
+        )
+        self.assertTrue(
+            await hub.route_notification(completed, "cc_connect:one")
+        )
+        self.assertEqual([event, completed], terminal.messages)
+        self.assertEqual([event, completed], cc_connect.messages)
+
 
 class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -403,6 +446,67 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await terminal.close()
 
+    async def test_cc_connect_approval_is_hidden_from_source_but_reaches_terminal(self):
+        notifications = []
+
+        async def notify(token, payload):
+            notifications.append((token, payload))
+
+        self.proxy.on_approval_request = notify
+        remote = await self.session.ws_connect(
+            "http://localhost/?client=cc_connect"
+        )
+        terminal = await self.session.ws_connect(
+            "http://localhost/?client=terminal"
+        )
+        try:
+            for request_id, socket in ((30, remote), (31, terminal)):
+                await socket.send_json(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "thread/resume",
+                        "params": {"threadId": "thread-1"},
+                    }
+                )
+                self.assertEqual(
+                    request_id, (await socket.receive_json())["id"]
+                )
+
+            await remote.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 32,
+                    "method": "turn/start",
+                    "params": {
+                        "threadId": "thread-1",
+                        "input": [{"type": "text", "text": "remote task"}],
+                    },
+                }
+            )
+            self.assertEqual(32, (await remote.receive_json())["id"])
+            for _ in range(2):
+                await remote.receive_json()
+                await terminal.receive_json()
+
+            await self.upstream.send_approval(connection_index=0)
+            await self.upstream.send_approval(connection_index=1)
+
+            approval = await asyncio.wait_for(
+                terminal.receive_json(), timeout=0.2
+            )
+            self.assertEqual(
+                "item/commandExecution/requestApproval",
+                approval["method"],
+            )
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(remote.receive_json(), timeout=0.1)
+            self.assertEqual(1, len(notifications))
+            self.assertEqual(approval["id"], notifications[0][0])
+        finally:
+            await terminal.close()
+            await remote.close()
+
     async def test_remote_turn_events_reach_terminal_on_same_thread(self):
         terminal = await self.session.ws_connect("http://localhost/?client=terminal")
         remote = await self.session.ws_connect("http://localhost/?client=cc_connect")
@@ -456,13 +560,18 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await remote.close()
             await terminal.close()
 
-    async def test_terminal_completion_notifies_once_but_cc_completion_does_not(self):
-        notifications = []
+    async def test_completion_uses_exactly_one_callback_for_each_origin(self):
+        terminal_notifications = []
+        remote_notifications = []
 
-        async def notify(thread_id, text):
-            notifications.append((thread_id, text))
+        async def notify_terminal(thread_id, text):
+            terminal_notifications.append((thread_id, text))
 
-        self.proxy.on_terminal_completion = notify
+        async def notify_remote(thread_id, text):
+            remote_notifications.append((thread_id, text))
+
+        self.proxy.on_terminal_completion = notify_terminal
+        self.proxy.on_remote_completion = notify_remote
         self.proxy._thread_origins["thread-terminal"] = "terminal"
         await self.proxy._observe_notification(
             {
@@ -487,15 +596,34 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.proxy._thread_origins["thread-cc"] = "cc_connect"
         await self.proxy._observe_notification(
             {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-cc",
+                    "turnId": "turn-2",
+                    "item": {
+                        "id": "message-2",
+                        "type": "agentMessage",
+                        "text": "remote result",
+                        "phase": "final_answer",
+                    },
+                },
+            }
+        )
+        await self.proxy._observe_notification(
+            {
                 "method": "turn/completed",
                 "params": {
                     "threadId": "thread-cc",
                     "turn": {"id": "turn-2", "status": "completed"},
                 },
-            },
-            "cc_connect",
+            }
         )
-        self.assertEqual([("thread-terminal", "done")], notifications)
+        self.assertEqual(
+            [("thread-terminal", "done")], terminal_notifications
+        )
+        self.assertEqual(
+            [("thread-cc", "remote result")], remote_notifications
+        )
 
     async def test_terminal_completion_uses_only_last_final_answer(self):
         notifications = []

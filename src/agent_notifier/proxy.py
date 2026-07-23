@@ -86,6 +86,7 @@ class ApprovalFanout:
         message: dict,
         upstream,
         source_client_id: str | None = None,
+        exclude_client_id: str | None = None,
     ) -> str:
         token = f"agent-notifier-approval:{uuid.uuid4()}"
         routed = dict(message)
@@ -101,7 +102,12 @@ class ApprovalFanout:
                 message,
             )
         thread_id = (message.get("params") or {}).get("threadId")
-        await self.event_hub.broadcast(routed, thread_id, source_client_id)
+        await self.event_hub.broadcast(
+            routed,
+            thread_id,
+            source_client_id,
+            exclude_client_id=exclude_client_id,
+        )
         return token
 
     async def route_upstream_resolution(
@@ -228,6 +234,7 @@ class AppServerProxy:
         listen_socket: Path,
         upstream_socket: Path,
         on_terminal_completion: Callable[[str, str], Awaitable[None]] | None = None,
+        on_remote_completion: Callable[[str, str], Awaitable[None]] | None = None,
         approval_store: ApprovalStore | None = None,
         on_approval_request: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
@@ -237,6 +244,7 @@ class AppServerProxy:
         self.fanout = ApprovalFanout(approval_store, self.event_hub)
         self.runner: web.AppRunner | None = None
         self.on_terminal_completion = on_terminal_completion
+        self.on_remote_completion = on_remote_completion
         self.on_approval_request = on_approval_request
         self._thread_origins: dict[str, str] = {}
         self._turn_text: dict[tuple[str, str], list[str]] = {}
@@ -312,6 +320,11 @@ class AppServerProxy:
                         await self.event_hub.subscribe_from_request(
                             client_id, payload
                         )
+                        await self.event_hub.register_turn_request(
+                            (payload.get("params") or {}).get("threadId"),
+                            client_id,
+                            payload.get("method") or "",
+                        )
                         if "id" in payload and payload.get("method"):
                             pending_request_methods[payload["id"]] = payload["method"]
                         if payload.get("method") in {"turn/start", "turn/steer"}:
@@ -349,8 +362,19 @@ class AppServerProxy:
                                 client_id, request_method, payload
                             )
                         if payload.get("method") in APPROVAL_METHODS and "id" in payload:
+                            if not await self.event_hub.is_authoritative_source(
+                                payload, client_id
+                            ):
+                                continue
                             token = await self.fanout.publish(
-                                payload, upstream, client_id
+                                payload,
+                                upstream,
+                                client_id,
+                                exclude_client_id=(
+                                    client_id
+                                    if client_kind == "cc_connect"
+                                    else None
+                                ),
                             )
                             if self.on_approval_request:
                                 try:
@@ -400,22 +424,18 @@ class AppServerProxy:
             await downstream.close()
         return downstream
 
-    async def _observe_notification(self, payload: dict, client_kind: str = "terminal") -> None:
+    async def _observe_notification(self, payload: dict) -> None:
         method = payload.get("method")
         params = payload.get("params") or {}
         thread_id = params.get("threadId")
         turn_id = params.get("turnId")
         origin = self._thread_origins.get(thread_id) if thread_id else None
         if method == "item/agentMessage/delta" and thread_id and turn_id:
-            if origin != client_kind:
-                return
             self._turn_text.setdefault((thread_id, turn_id), []).append(
                 params.get("delta", "")
             )
             return
         if method == "item/completed" and thread_id and turn_id:
-            if origin != client_kind:
-                return
             item = params.get("item") or {}
             if item.get("type") != "agentMessage":
                 return
@@ -426,8 +446,6 @@ class AppServerProxy:
                 self._turn_final_text[key] = text
             return
         if method != "turn/completed" or not thread_id:
-            return
-        if origin != client_kind:
             return
         turn = params.get("turn") or {}
         turn_id = turn.get("id")
@@ -447,6 +465,8 @@ class AppServerProxy:
         origin = self._thread_origins.pop(thread_id, "terminal")
         if should_send_completion_notification(origin) and self.on_terminal_completion:
             await self.on_terminal_completion(thread_id, text)
+        elif origin == "cc_connect" and self.on_remote_completion:
+            await self.on_remote_completion(thread_id, text)
 
     async def close(self) -> None:
         if self.runner:

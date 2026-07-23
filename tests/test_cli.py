@@ -97,11 +97,29 @@ class CodexBindingTest(unittest.TestCase):
             registry.close()
 
             rpc = AsyncMock()
-            rpc.call.return_value = {
-                "thread": {
-                    "id": "019f-new-thread",
-                }
-            }
+            rpc.call.side_effect = [
+                {"thread": {"id": "019f-new-thread"}},
+                {"turn": {"id": "turn-bootstrap"}},
+            ]
+            rpc.next_event.side_effect = [
+                {
+                    "method": "turn/started",
+                    "params": {
+                        "threadId": "019f-new-thread",
+                        "turn": {"id": "turn-bootstrap"},
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "019f-new-thread",
+                        "turn": {
+                            "id": "turn-bootstrap",
+                            "status": "completed",
+                        },
+                    },
+                },
+            ]
             with patch(
                 "agent_notifier.cli.CodexAppServerClient",
                 return_value=rpc,
@@ -116,7 +134,8 @@ class CodexBindingTest(unittest.TestCase):
                 )
 
             rpc.connect.assert_awaited_once()
-            rpc.call.assert_awaited_once_with(
+            self.assertEqual(2, rpc.call.await_count)
+            rpc.call.assert_any_await(
                 "thread/start",
                 {
                     "cwd": "/workspace/le-wm",
@@ -124,6 +143,20 @@ class CodexBindingTest(unittest.TestCase):
                     "threadSource": "user",
                 },
             )
+            rpc.call.assert_any_await(
+                "turn/start",
+                {
+                    "threadId": "019f-new-thread",
+                    "input": [
+                        {
+                            "type": "text",
+                            "text": "初始化会话，只回复 OK。",
+                            "text_elements": [],
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(2, rpc.next_event.await_count)
             rpc.close.assert_awaited_once()
             self.assertEqual("019f-new-thread", mapping.thread_id)
             registry = SessionRegistry(paths.state_db)
@@ -180,6 +213,60 @@ class CodexBindingTest(unittest.TestCase):
                 with self.assertRaisesRegex(
                     RuntimeError, "thread creation failed"
                 ):
+                    asyncio.run(
+                        create_agent_session(
+                            paths,
+                            "codex",
+                            project="le-wm-codex",
+                            external_key="feishu:one",
+                        )
+                    )
+
+            rpc.close.assert_awaited_once()
+            registry = SessionRegistry(paths.state_db)
+            self.assertEqual(
+                "thread-old",
+                registry.get(
+                    "cc_connect", "le-wm-codex", "feishu:one"
+                ).thread_id,
+            )
+            registry.close()
+
+    def test_agent_new_bootstrap_failure_keeps_current_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:one",
+                "thread-old",
+                "/workspace/le-wm",
+            )
+            registry.close()
+
+            rpc = AsyncMock()
+            rpc.call.side_effect = [
+                {"thread": {"id": "019f-new-thread"}},
+                {"turn": {"id": "turn-bootstrap"}},
+            ]
+            rpc.next_event.return_value = {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "019f-new-thread",
+                    "turn": {
+                        "id": "turn-bootstrap",
+                        "status": "failed",
+                        "error": {"message": "bootstrap failed"},
+                    },
+                },
+            }
+            with patch(
+                "agent_notifier.cli.CodexAppServerClient",
+                return_value=rpc,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "bootstrap failed"):
                     asyncio.run(
                         create_agent_session(
                             paths,
@@ -510,7 +597,7 @@ class CodexBindingTest(unittest.TestCase):
             )
             registry.close()
 
-    def test_agent_list_keeps_fresh_thread_before_rollout_is_written(self):
+    def test_agent_list_prunes_thread_without_rollout_immediately(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             paths = make_paths(root)
@@ -536,14 +623,13 @@ class CodexBindingTest(unittest.TestCase):
                     external_key="feishu:one",
                 )
 
-            self.assertIn("Codex 会话（1）", listed)
-            self.assertIn("[当前] 019f8e4b", listed)
+            self.assertIn("Codex 会话（0）", listed)
+            self.assertNotIn("019f8e4b", listed)
             registry = SessionRegistry(paths.state_db)
-            self.assertEqual(
-                fresh_thread,
+            self.assertIsNone(
                 registry.get(
                     "cc_connect", "le-wm-codex", "feishu:one"
-                ).thread_id,
+                )
             )
             registry.close()
 

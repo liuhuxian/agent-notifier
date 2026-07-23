@@ -53,11 +53,13 @@ agent-notifier doctor
 - 一个飞书聊天可以同时订阅多个终端 thread 的审批和完成通知，但只维护一个
   active thread 作为普通任务目标；切换任务目标不会取消其他 thread 的通知。
 - 活动 turn 收到飞书消息时使用 `turn/steer`，不会并发启动另一个竞争 turn。
-- 权限请求会显示在终端，并主动推送到绑定的飞书会话；第一份有效响应生效，
-  晚到响应会提示已经处理。
+- 终端发起的权限请求会显示在终端，并主动推送到绑定的飞书会话；飞书发起的
+  权限请求只显示 Agent Notifier 交互卡片，不再重复生成 cc-connect 原生卡片。
+  第一份有效响应生效，晚到响应会提示已经处理。
 - 飞书向已绑定 thread 提交任务时，同一 thread 的已打开终端会同步显示
   `turn/*`、`item/*` 和工具执行进度；普通 JSON-RPC 响应仍只返回原请求方。
-- 飞书发起的 turn 直接收到正常回复，不再额外发送重复的“完成”通知。
+- 飞书发起的 turn 由 Agent Notifier 直接投递最终回复；ACP 只返回回合完成
+  状态，不再经 cc-connect 重复回传同一段文本。
 
 ## 安装
 
@@ -213,10 +215,10 @@ agent-notifier bind <THREAD_ID> --project le-wm-codex
 ```
 
 `/agent-new codex` 通过 Agent Notifier 管理的共享 Codex App Server 创建一个
-全新的 Codex thread，自动订阅通知，并立即将当前飞书聊天的普通任务目标切换到
-新 thread。创建失败时不会改变原来的活动路由。空 thread 在收到第一条普通消息
-前可能尚无 rollout 文件；会话列表会为新注册 thread 保留 5 分钟落盘保护期，
-避免将其误判为已删除会话。
+全新的 Codex thread。创建后会自动执行一次静默初始化 turn，使 rollout 立即
+落盘；初始化回复和完成通知不会发送到飞书。初始化成功后才会订阅通知，并将
+当前飞书聊天的普通任务目标切换到新 thread；任一步骤失败都不会改变原来的
+活动路由。
 
 当前只实现 `codex` provider；后续接入 OpenCode 后沿用相同命令，例如
 `/agent-new opencode` 和 `/agent-list opencode`。`/agent-current` 会统一显示各

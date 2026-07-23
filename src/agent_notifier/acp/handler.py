@@ -85,17 +85,10 @@ class ACPHandler:
             )
 
             async def emit_backend(event: dict) -> None:
-                if event.get("kind") == "text" and event.get("text"):
-                    await self.emit(
-                        "session/update",
-                        {
-                            "sessionId": cc_session_id,
-                            "update": {
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": event["text"]},
-                            },
-                        },
-                    )
+                # Agent Notifier delivers the authoritative final response
+                # directly to the originating chat. Forwarding the same text
+                # through cc-connect would create a second reply.
+                _ = event
 
             return await self.backend.prompt(
                 target_thread_id, text, "cc_connect", emit_backend

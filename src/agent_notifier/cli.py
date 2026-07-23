@@ -234,7 +234,7 @@ async def create_agent_session(
         registry.close()
 
     rpc = CodexAppServerClient(
-        paths.proxy_socket, "agent-notifier-agent-new"
+        paths.proxy_socket, "agent-notifier-bootstrap"
     )
     await rpc.connect()
     try:
@@ -246,10 +246,43 @@ async def create_agent_session(
                 "threadSource": "user",
             },
         )
+        thread_id = result["thread"]["id"]
+        turn_result = await rpc.call(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "初始化会话，只回复 OK。",
+                        "text_elements": [],
+                    }
+                ],
+            },
+        )
+        turn_id = turn_result["turn"]["id"]
+        while True:
+            event = await asyncio.wait_for(rpc.next_event(), timeout=120)
+            if event.get("method") != "turn/completed":
+                continue
+            params = event.get("params") or {}
+            turn = params.get("turn") or {}
+            if (
+                params.get("threadId") != thread_id
+                or turn.get("id") != turn_id
+            ):
+                continue
+            if turn.get("status") != "completed":
+                error = turn.get("error") or {}
+                raise RuntimeError(
+                    error.get("message")
+                    or f"Codex bootstrap turn ended with status "
+                    f"{turn.get('status')!r}"
+                )
+            break
     finally:
         await rpc.close()
 
-    thread_id = result["thread"]["id"]
     registry = SessionRegistry(paths.state_db)
     try:
         return registry.bind(

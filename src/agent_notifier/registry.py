@@ -5,7 +5,6 @@ from __future__ import annotations
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -239,7 +238,6 @@ class SessionRegistry:
         valid_thread_ids: set[str],
         project: str | None = None,
         external_key: str | None = None,
-        grace_seconds: int = 300,
     ) -> tuple[int, int]:
         clauses = ["adapter = ?"]
         values: list[str] = [adapter]
@@ -269,17 +267,8 @@ class SessionRegistry:
                 values,
             ).fetchall()
 
-            cutoff = (
-                datetime.now(timezone.utc).replace(tzinfo=None)
-                - timedelta(seconds=grace_seconds)
-            )
-
             def is_stale(row) -> bool:
-                updated_at = datetime.fromisoformat(row[4])
-                return (
-                    row[3] not in valid_thread_ids
-                    and updated_at <= cutoff
-                )
+                return row[3] not in valid_thread_ids
 
             stale_subscriptions = [
                 row[:4] for row in subscriptions if is_stale(row)
