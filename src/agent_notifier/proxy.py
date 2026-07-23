@@ -34,7 +34,32 @@ APPROVAL_METHODS = {
 class PendingApproval:
     upstream: object
     original_id: object
+    request: dict
     resolved: bool = False
+
+
+def approval_short_id(token: str) -> str:
+    return token.rsplit(":", 1)[-1][:10]
+
+
+def approval_result(request: dict, decision: str) -> dict:
+    method = request.get("method")
+    params = request.get("params") or {}
+    allowed = decision == "allow"
+    if method == "item/permissions/requestApproval":
+        return {
+            "permissions": params.get("permissions") if allowed else {},
+            "scope": "turn",
+        }
+    if method in {"execCommandApproval", "applyPatchApproval"}:
+        return {
+            "decision": (
+                "approved"
+                if allowed
+                else {"denied": {"rejection": "Denied remotely"}}
+            )
+        }
+    return {"decision": "accept" if allowed else "decline"}
 
 
 class ApprovalFanout:
@@ -52,12 +77,12 @@ class ApprovalFanout:
         async with self.lock:
             self.clients.pop(client_id, None)
 
-    async def publish(self, message: dict, upstream) -> None:
+    async def publish(self, message: dict, upstream) -> str:
         token = f"agent-notifier-approval:{uuid.uuid4()}"
         routed = dict(message)
         routed["id"] = token
         async with self.lock:
-            self.pending[token] = PendingApproval(upstream, message["id"])
+            self.pending[token] = PendingApproval(upstream, message["id"], message)
             clients = list(self.clients.values())
         if self.store:
             params = message.get("params") or {}
@@ -70,47 +95,91 @@ class ApprovalFanout:
         for client in clients:
             if not client.closed:
                 await client.send_json(routed)
+        return token
+
+    async def _claim(
+        self, token: str, decision: str, resolved_by: str
+    ) -> PendingApproval | None:
+        async with self.lock:
+            pending = self.pending.get(token)
+            if pending is None:
+                raise KeyError(token)
+            if pending.resolved:
+                return None
+            if self.store:
+                try:
+                    self.store.resolve(token, decision, resolved_by)
+                except ApprovalAlreadyResolved:
+                    pending.resolved = True
+                    return None
+            pending.resolved = True
+            return pending
 
     async def resolve(self, message: dict, resolved_by: str) -> bool:
         token = message.get("id")
         if not isinstance(token, str) or not token.startswith("agent-notifier-approval:"):
             return False
-        async with self.lock:
-            pending = self.pending.get(token)
-            if pending is None or pending.resolved:
-                return True
-            if self.store:
-                result = message.get("result") or {}
-                accepted = result.get("decision") in {
-                    "accept",
-                    "acceptForSession",
-                    "approved",
-                    "approved_for_session",
-                }
-                if isinstance(result.get("decision"), dict):
-                    accepted = any(
-                        key in result["decision"]
-                        for key in (
-                            "acceptWithExecpolicyAmendment",
-                            "applyNetworkPolicyAmendment",
-                            "approved_execpolicy_amendment",
-                            "network_policy_amendment",
-                        )
-                    )
-                if "permissions" in result:
-                    accepted = bool(result.get("permissions"))
-                try:
-                    self.store.resolve(
-                        token, "allow" if accepted else "deny", resolved_by
-                    )
-                except ApprovalAlreadyResolved:
-                    pending.resolved = True
-                    return True
-            pending.resolved = True
+        result = message.get("result") or {}
+        accepted = result.get("decision") in {
+            "accept",
+            "acceptForSession",
+            "approved",
+            "approved_for_session",
+        }
+        if isinstance(result.get("decision"), dict):
+            accepted = any(
+                key in result["decision"]
+                for key in (
+                    "acceptWithExecpolicyAmendment",
+                    "applyNetworkPolicyAmendment",
+                    "approved_execpolicy_amendment",
+                    "network_policy_amendment",
+                )
+            )
+        if "permissions" in result:
+            accepted = bool(result.get("permissions"))
+        try:
+            pending = await self._claim(
+                token, "allow" if accepted else "deny", resolved_by
+            )
+        except KeyError:
+            return True
+        if pending is None:
+            return True
         routed = dict(message)
         routed["id"] = pending.original_id
         await pending.upstream.send_json(routed)
         return True
+
+    async def resolve_external(
+        self, approval_id: str, decision: str, resolved_by: str = "feishu"
+    ) -> str:
+        if decision not in {"allow", "deny"}:
+            raise ValueError(f"invalid approval decision: {decision}")
+        async with self.lock:
+            if approval_id.startswith("agent-notifier-approval:"):
+                candidates = [approval_id] if approval_id in self.pending else []
+            else:
+                candidates = [
+                    token
+                    for token in self.pending
+                    if token.rsplit(":", 1)[-1].startswith(approval_id)
+                ]
+        if not candidates:
+            raise KeyError(approval_id)
+        if len(candidates) > 1:
+            raise ValueError(f"ambiguous approval id: {approval_id}")
+        pending = await self._claim(candidates[0], decision, resolved_by)
+        if pending is None:
+            return "already_resolved"
+        await pending.upstream.send_json(
+            {
+                "jsonrpc": "2.0",
+                "id": pending.original_id,
+                "result": approval_result(pending.request, decision),
+            }
+        )
+        return "resolved"
 
 
 class AppServerProxy:
@@ -120,12 +189,14 @@ class AppServerProxy:
         upstream_socket: Path,
         on_terminal_completion: Callable[[str, str], Awaitable[None]] | None = None,
         approval_store: ApprovalStore | None = None,
+        on_approval_request: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
         self.listen_socket = Path(listen_socket)
         self.upstream_socket = Path(upstream_socket)
         self.fanout = ApprovalFanout(approval_store)
         self.runner: web.AppRunner | None = None
         self.on_terminal_completion = on_terminal_completion
+        self.on_approval_request = on_approval_request
         self._thread_origins: dict[str, str] = {}
         self._turn_text: dict[tuple[str, str], list[str]] = {}
         self._completed_turns: set[str] = set()
@@ -139,10 +210,31 @@ class AppServerProxy:
         app = web.Application()
         app.router.add_get("/", self._websocket)
         app.router.add_get("/rpc", self._websocket)
+        app.router.add_post("/approval", self._approval_decision)
         self.runner = web.AppRunner(app)
         await self.runner.setup()
         await web.UnixSite(self.runner, str(self.listen_socket)).start()
         os.chmod(self.listen_socket, 0o600)
+
+    async def _approval_decision(self, request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            approval_id = str(payload.get("approval_id") or "")
+            decision = str(payload.get("decision") or "")
+            if not approval_id:
+                raise ValueError("approval_id is required")
+            status = await self.fanout.resolve_external(approval_id, decision)
+            return web.json_response({"status": status, "approval_id": approval_id})
+        except KeyError:
+            return web.json_response(
+                {"status": "not_found", "error": "approval request not found"},
+                status=404,
+            )
+        except (ValueError, json.JSONDecodeError) as exc:
+            return web.json_response(
+                {"status": "invalid", "error": str(exc)},
+                status=400,
+            )
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         downstream = web.WebSocketResponse(heartbeat=30, max_msg_size=0)
@@ -201,7 +293,16 @@ class AppServerProxy:
                             method = payload.get("method")
                             request_id = payload.get("id")
                         if payload.get("method") in APPROVAL_METHODS and "id" in payload:
-                            await self.fanout.publish(payload, upstream)
+                            token = await self.fanout.publish(payload, upstream)
+                            if self.on_approval_request:
+                                try:
+                                    await self.on_approval_request(token, payload)
+                                except Exception:
+                                    logger.exception(
+                                        "failed to send remote approval notification: "
+                                        "approval=%s",
+                                        approval_short_id(token),
+                                    )
                         else:
                             await self._observe_notification(payload, client_kind)
                             if not downstream.closed:

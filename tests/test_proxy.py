@@ -90,6 +90,59 @@ class ApprovalFanoutTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("terminal", resolution.resolved_by)
             store.close()
 
+    async def test_external_short_id_resolves_pending_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ApprovalStore(Path(tmp) / "state.sqlite3")
+            fanout = ApprovalFanout(store)
+            upstream = RecordingSocket()
+            token = await fanout.publish(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "item/commandExecution/requestApproval",
+                    "params": {"threadId": "thread-1", "command": "touch /tmp/x"},
+                },
+                upstream,
+            )
+            short_id = token.rsplit(":", 1)[-1][:10]
+            self.assertEqual(
+                "resolved",
+                await fanout.resolve_external(short_id, "allow"),
+            )
+            self.assertEqual(
+                {"decision": "accept"}, upstream.messages[0]["result"]
+            )
+            self.assertEqual(
+                "already_resolved",
+                await fanout.resolve_external(short_id, "deny"),
+            )
+            self.assertEqual(1, len(upstream.messages))
+            resolution = store.get_resolution(token)
+            self.assertEqual("allow", resolution.decision)
+            self.assertEqual("feishu", resolution.resolved_by)
+            store.close()
+
+    async def test_external_permission_denial_uses_permission_result_shape(self):
+        fanout = ApprovalFanout()
+        upstream = RecordingSocket()
+        token = await fanout.publish(
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "item/permissions/requestApproval",
+                "params": {
+                    "threadId": "thread-1",
+                    "permissions": {"network": True},
+                },
+            },
+            upstream,
+        )
+        await fanout.resolve_external(token, "deny")
+        self.assertEqual(
+            {"permissions": {}, "scope": "turn"},
+            upstream.messages[0]["result"],
+        )
+
 
 class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -138,6 +191,28 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         result = await client.call("thread/read", {})
         self.assertEqual("thread/read", result["method"])
         await client.close()
+
+    async def test_http_approval_control_resolves_pending_request(self):
+        upstream = RecordingSocket()
+        token = await self.proxy.fanout.publish(
+            {
+                "jsonrpc": "2.0",
+                "id": 13,
+                "method": "item/fileChange/requestApproval",
+                "params": {"threadId": "thread-1", "grantRoot": "/workspace"},
+            },
+            upstream,
+        )
+        async with self.session.post(
+            "http://localhost/approval",
+            json={
+                "approval_id": token.rsplit(":", 1)[-1][:10],
+                "decision": "allow",
+            },
+        ) as response:
+            self.assertEqual(200, response.status)
+            self.assertEqual("resolved", (await response.json())["status"])
+        self.assertEqual({"decision": "accept"}, upstream.messages[0]["result"])
 
     async def test_terminal_completion_notifies_once_but_cc_completion_does_not(self):
         notifications = []

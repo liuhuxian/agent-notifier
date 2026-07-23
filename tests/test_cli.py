@@ -4,6 +4,7 @@ from pathlib import Path
 
 from agent_notifier.cli import (
     _resume_thread_id,
+    approval_decision_message,
     bind_terminal_thread,
     build_parser,
 )
@@ -38,6 +39,27 @@ class CodexBindingTest(unittest.TestCase):
         )
         self.assertEqual("le-wm", args.notify_project)
         self.assertEqual(["resume", "thread-1"], args.codex_args)
+
+    def test_decide_parser_accepts_remote_approval(self):
+        args = build_parser().parse_args(
+            ["decide", "--quiet", "allow", "1234567890"]
+        )
+        self.assertEqual("allow", args.decision)
+        self.assertEqual("1234567890", args.approval_id)
+        self.assertTrue(args.quiet)
+
+    def test_quiet_card_callback_reports_already_handled_approval(self):
+        message = approval_decision_message(
+            "already_resolved", "allow", "1234567890", quiet=True
+        )
+        self.assertEqual("审批已经被处理：1234567890", message)
+
+    def test_quiet_card_callback_suppresses_normal_success(self):
+        self.assertIsNone(
+            approval_decision_message(
+                "resolved", "allow", "1234567890", quiet=True
+            )
+        )
 
     def test_unique_route_is_rebound_to_resumed_thread(self):
         with tempfile.TemporaryDirectory() as tmp:

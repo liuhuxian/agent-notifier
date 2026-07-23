@@ -7,6 +7,7 @@ from unittest.mock import patch
 from agent_notifier.cc_config import configure_project
 from agent_notifier.config import Paths
 from agent_notifier.hook_config import decode_command, gate_hooks
+from agent_notifier.service import format_approval_message
 from agent_notifier.versioning import parse_codex_version, parse_cc_connect_version
 
 
@@ -55,11 +56,61 @@ type = "opencode"
         self.assertIn('type = "opencode"', other)
         self.assertEqual(1, target.count('type = "acp"'))
         self.assertNotIn('type = "codex"', target)
+        self.assertIn(
+            'exec = "/home/me/.local/bin/agent-notifier decide --quiet allow {{1}}"',
+            result,
+        )
+        self.assertIn(
+            'exec = "/home/me/.local/bin/agent-notifier decide --quiet deny {{1}}"',
+            result,
+        )
 
     def test_missing_project_is_rejected(self):
         with self.assertRaises(ValueError):
             configure_project('[[projects]]\nname = "other"\n', "missing", "/bin/tool")
 
+    def test_existing_approval_commands_are_replaced_idempotently(self):
+        source = '''
+[[projects]]
+name = "le-wm"
+[projects.agent]
+type = "codex"
+
+[[commands]]
+name = "codex-approve"
+description = "old"
+exec = "python3 old.py allow {{1}}"
+
+[[commands]]
+name = "codex-deny"
+description = "old"
+exec = "python3 old.py deny {{1}}"
+'''
+        once = configure_project(source, "le-wm", "/opt/agent-notifier")
+        twice = configure_project(once, "le-wm", "/opt/agent-notifier")
+        self.assertEqual(once, twice)
+        self.assertNotIn("old.py", once)
+        self.assertEqual(1, once.count('name = "codex-approve"'))
+        self.assertEqual(1, once.count('name = "codex-deny"'))
+
+
+class ApprovalMessageTest(unittest.TestCase):
+    def test_message_contains_short_id_reason_command_and_actions(self):
+        message = format_approval_message(
+            "agent-notifier-approval:1234567890abcdef",
+            {
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "reason": "需要测试权限",
+                    "command": "touch /tmp/test",
+                },
+            },
+        )
+        self.assertIn("Codex 权限审批 [1234567890]", message)
+        self.assertIn("原因：需要测试权限", message)
+        self.assertIn("操作：touch /tmp/test", message)
+        self.assertIn("/codex-approve 1234567890", message)
+        self.assertIn("/codex-deny 1234567890", message)
 
 class HookConfigTest(unittest.TestCase):
     def test_only_completion_and_permission_hooks_are_gated(self):

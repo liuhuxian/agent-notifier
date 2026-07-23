@@ -7,6 +7,7 @@ import re
 
 
 PROJECT_START = re.compile(r"(?m)(?=^\s*\[\[projects\]\]\s*$)")
+COMMAND_START = re.compile(r"(?m)(?=^\s*\[\[commands\]\]\s*$)")
 
 
 def _set_key(section: str, key: str, value: str) -> str:
@@ -35,6 +36,47 @@ def _replace_table_body(block: str, table: str, update) -> str:
     return block[:body_start] + body + block[body_end:]
 
 
+def _upsert_command(
+    source: str, name: str, description: str, executable: str
+) -> str:
+    parts = COMMAND_START.split(source)
+    for index, block in enumerate(parts):
+        if not re.match(r"^\s*\[\[commands\]\]", block):
+            continue
+        current_name = re.search(
+            r'(?m)^\s*name\s*=\s*"([^"]+)"\s*$', block
+        )
+        if not current_name or current_name.group(1) != name:
+            continue
+        block = _set_key(block, "description", json.dumps(description))
+        parts[index] = _set_key(block, "exec", json.dumps(executable))
+        return "".join(parts)
+    suffix = "" if source.endswith("\n") else "\n"
+    return (
+        source
+        + suffix
+        + "\n[[commands]]\n"
+        + f"name = {json.dumps(name)}\n"
+        + f"description = {json.dumps(description)}\n"
+        + f"exec = {json.dumps(executable)}\n"
+    )
+
+
+def _configure_approval_commands(source: str, command: str) -> str:
+    source = _upsert_command(
+        source,
+        "codex-approve",
+        "Approve a pending Codex permission request",
+        f"{command} decide --quiet allow {{{{1}}}}",
+    )
+    return _upsert_command(
+        source,
+        "codex-deny",
+        "Deny a pending Codex permission request",
+        f"{command} decide --quiet deny {{{{1}}}}",
+    )
+
+
 def configure_project(source: str, project_name: str, command: str) -> str:
     """Change one cc-connect project to the agent-notifier ACP command."""
     parts = PROJECT_START.split(source)
@@ -61,4 +103,4 @@ def configure_project(source: str, project_name: str, command: str) -> str:
         break
     if not found:
         raise ValueError(f"cc-connect project not found: {project_name}")
-    return "".join(parts)
+    return _configure_approval_commands("".join(parts), command)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import logging
 import os
 import signal
 import stat
@@ -12,8 +13,37 @@ from pathlib import Path
 
 from .approvals import ApprovalStore
 from .config import Paths
-from .proxy import AppServerProxy
+from .feishu import send_approval_card
+from .proxy import AppServerProxy, approval_short_id
 from .registry import SessionRegistry
+
+
+logger = logging.getLogger(__name__)
+
+
+def approval_details(request: dict) -> tuple[str, str]:
+    params = request.get("params") or {}
+    reason = str(params.get("reason") or request.get("method") or "Codex 权限请求")
+    command = params.get("command")
+    if not command:
+        actions = params.get("commandActions") or []
+        if actions:
+            command = actions[0].get("command")
+    if not command:
+        command = params.get("grantRoot") or params.get("permissions") or "(无命令摘要)"
+    return reason[:800], str(command)[:1600]
+
+
+def format_approval_message(token: str, request: dict) -> str:
+    request_id = approval_short_id(token)
+    reason, command = approval_details(request)
+    return (
+        f"Codex 权限审批 [{request_id}]\n"
+        f"原因：{reason}\n"
+        f"操作：{command}\n\n"
+        f"允许：/codex-approve {request_id}\n"
+        f"拒绝：/codex-deny {request_id}"
+    )
 
 
 def codex_app_server_command(paths: Paths, codex_binary: str = "codex") -> list[str]:
@@ -82,8 +112,9 @@ class SharedService:
                     self.proxy = AppServerProxy(
                         self.paths.proxy_socket,
                         self.paths.upstream_socket,
-                        self._notify_terminal_completion,
-                        self.approval_store,
+                        on_terminal_completion=self._notify_terminal_completion,
+                        approval_store=self.approval_store,
+                        on_approval_request=self._notify_approval_request,
                     )
                     await self.proxy.start()
                     backoff = 1.0
@@ -120,12 +151,54 @@ class SharedService:
     async def _notify_terminal_completion(self, thread_id: str, text: str) -> None:
         mapping = self.registry.find_by_thread(thread_id) if self.registry else None
         if mapping is None:
+            logger.warning(
+                "no Feishu route for terminal completion: thread=%s", thread_id
+            )
             return
+        message = text.strip() or f"Codex turn completed: {thread_id}"
+        await self._send_to_mapping(mapping, message)
+
+    async def _notify_approval_request(self, token: str, request: dict) -> None:
+        params = request.get("params") or {}
+        thread_id = params.get("threadId")
+        mapping = (
+            self.registry.find_by_thread(thread_id)
+            if self.registry and thread_id
+            else None
+        )
+        if mapping is None:
+            logger.warning(
+                "no Feishu route for approval: approval=%s thread=%s",
+                approval_short_id(token),
+                thread_id,
+            )
+            return
+        request_id = approval_short_id(token)
+        reason, operation = approval_details(request)
+        receive_id = mapping.external_key.rsplit(":", 1)[-1]
+        try:
+            await send_approval_card(
+                project=mapping.project,
+                receive_id=receive_id,
+                session_key=mapping.external_key,
+                approval_id=request_id,
+                reason=reason,
+                operation=operation,
+            )
+        except Exception:
+            logger.exception(
+                "Feishu approval card failed; falling back to text: approval=%s",
+                request_id,
+            )
+            await self._send_to_mapping(
+                mapping, format_approval_message(token, request)
+            )
+
+    async def _send_to_mapping(self, mapping, message: str) -> None:
         direct = Path.home() / ".npm-global/lib/node_modules/cc-connect/bin/cc-connect"
         binary = str(direct) if direct.exists() else shutil.which("cc-connect")
         if not binary:
-            return
-        message = text.strip() or f"Codex turn completed: {thread_id}"
+            raise RuntimeError("cc-connect executable not found")
         process = await asyncio.create_subprocess_exec(
             binary,
             "send",
@@ -135,8 +208,15 @@ class SharedService:
             "-s",
             mapping.external_key,
             stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await process.communicate(message.encode())
+        _, stderr = await process.communicate(message.encode())
+        if process.returncode:
+            raise RuntimeError(
+                f"cc-connect send failed ({process.returncode}): "
+                f"{stderr.decode(errors='replace').strip()}"
+            )
 
     async def _stop_child(self) -> None:
         if self.process and self.process.returncode is None:

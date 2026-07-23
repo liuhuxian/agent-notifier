@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+from aiohttp import ClientSession, UnixConnector
+
 from .acp.server import ACPStdioServer
 from .cc_config import configure_project
 from .codex.backend import CodexBackend
@@ -68,6 +70,29 @@ def bind_terminal_thread(
         )
     finally:
         registry.close()
+
+
+async def decide_approval(paths: Paths, decision: str, approval_id: str) -> str:
+    connector = UnixConnector(path=str(paths.proxy_socket))
+    async with ClientSession(connector=connector) as session:
+        async with session.post(
+            "http://localhost/approval",
+            json={"decision": decision, "approval_id": approval_id},
+        ) as response:
+            payload = await response.json()
+            if response.status >= 400:
+                raise ValueError(payload.get("error") or "approval decision failed")
+            return str(payload.get("status") or "resolved")
+
+
+def approval_decision_message(
+    status: str, decision: str, approval_id: str, quiet: bool
+) -> str | None:
+    if status == "already_resolved":
+        return f"审批已经被处理：{approval_id}"
+    if quiet:
+        return None
+    return f"approval {decision}: {approval_id}"
 
 
 def _run_version(command: list[str]) -> str:
@@ -249,6 +274,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bind.add_argument("thread_id")
     bind.add_argument("--project", required=True)
+    decide = sub.add_parser(
+        "decide", help="resolve a pending Codex approval request"
+    )
+    decide.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress success output for interactive card callbacks",
+    )
+    decide.add_argument("decision", choices=("allow", "deny"))
+    decide.add_argument("approval_id")
     sub.add_parser("status", help="show service status")
     sub.add_parser("doctor", help="validate versions, paths, and service")
     logs = sub.add_parser("logs", help="follow service logs")
@@ -312,6 +347,16 @@ def main() -> None:
                 cwd=os.getcwd(),
             )
             print(f"bound: {mapping.project} <- {mapping.thread_id}")
+        elif args.command == "decide":
+            ensure_service(paths)
+            status = asyncio.run(
+                decide_approval(paths, args.decision, args.approval_id)
+            )
+            message = approval_decision_message(
+                status, args.decision, args.approval_id, args.quiet
+            )
+            if message:
+                print(message)
         elif args.command == "status":
             running = _socket_ready(paths.proxy_socket)
             pid = paths.pid_file.read_text().strip() if paths.pid_file.exists() else "-"

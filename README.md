@@ -51,7 +51,8 @@ agent-notifier doctor
 - 纯终端启动或恢复的 Codex thread 不会自动出现在 cc-connect 的 `/list` 中；
   Agent Notifier 会单独维护终端 thread 的飞书通知路由。
 - 活动 turn 收到飞书消息时使用 `turn/steer`，不会并发启动另一个竞争 turn。
-- 权限请求同时发送到终端和飞书，第一份有效响应生效，晚到响应被忽略。
+- 权限请求会显示在终端，并主动推送到绑定的飞书会话；第一份有效响应生效，
+  晚到响应会提示已经处理。
 - 飞书发起的 turn 直接收到正常回复，不再额外发送重复的“完成”通知。
 
 ## 安装
@@ -138,6 +139,22 @@ agent-notifier configure-cc --project le-wm-codex
 cc-connect daemon restart
 ```
 
+`configure-cc` 同时安装或更新两个飞书自定义命令：
+
+```text
+/codex-approve <审批ID>
+/codex-deny <审批ID>
+```
+
+正常情况下，飞书会收到带“允许”和“拒绝”按钮的交互卡片。点击后卡片会显示
+本次选择，并通过对应的自定义命令将决定送回 Codex。审批 ID 是每次请求生成的
+10 位短标识；决定通过用户私有 Unix socket 返回等待中的 Codex App Server 请求，
+不开放网络端口。
+
+如果终端或另一个客户端已经先处理该审批，之后再点击飞书卡片不会重复执行操作，
+机器人会明确回复 `审批已经被处理：<审批ID>`。交互卡片发送失败时会自动降级为
+包含上述两个命令的纯文本消息。
+
 恢复最近一次备份：
 
 ```bash
@@ -171,6 +188,13 @@ agent-notifier codex --notify-project le-wm-codex resume <THREAD_ID>
 
 ```bash
 agent-notifier bind <THREAD_ID> --project le-wm-codex
+```
+
+本机也可以直接处理一个仍在等待的审批：
+
+```bash
+agent-notifier decide allow <审批ID>
+agent-notifier decide deny <审批ID>
 ```
 
 运维命令：
@@ -240,3 +264,5 @@ scripts/smoke_test.sh
 - 本地 Unix socket 不对网络开放。
 - cc-connect 与 Codex 升级后必须重新通过兼容性测试。
 - App Server 意外退出时，在途请求会明确失败，不会自动重放可能产生副作用的操作。
+- 审批 pending 状态包含到 App Server 的活动连接，服务重启后不能恢复；需要让
+  Codex 重新发起对应操作。
