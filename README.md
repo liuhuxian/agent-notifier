@@ -173,7 +173,12 @@ notify_interruption = true
 project = "le-wm-codex"
 receive_id_type = "chat_id"
 receive_id = "oc_your_notification_group_chat_id"
+message_format = "markdown" # or "text"
 ```
+
+`markdown` sends a text-only interactive card so Feishu renders emphasis,
+lists, line breaks, and fenced code blocks. `text` sends a plain Feishu text
+message and displays Markdown syntax literally.
 
 该群可同时在 `[chat_routes]` 中配置为 `silent`，从而只接收通知、不启动
 Codex/OpenCode 对话。分流规则为：

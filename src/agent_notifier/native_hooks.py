@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 
 MAX_SUMMARY_CHARS = 280
@@ -30,12 +29,10 @@ def compact(value: object, limit: int = MAX_SUMMARY_CHARS) -> str:
 
 
 def format_result(value: object, limit: int = MAX_RESULT_CHARS) -> str:
-    """Preserve terminal line breaks while removing unsupported Markdown fences."""
+    """Preserve terminal line breaks and Markdown syntax for Feishu cards."""
     if isinstance(value, list):
         value = "\n".join(str(item) for item in value)
     text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"```(?:[A-Za-z0-9_+.-]+)?\s*", "", text)
-    text = text.replace("```", "").replace("`", "")
     lines = [line.rstrip() for line in text.split("\n")]
     while lines and not lines[0].strip():
         lines.pop(0)

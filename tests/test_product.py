@@ -223,9 +223,14 @@ class HookConfigTest(unittest.TestCase):
             "cwd": "/workspace/le-wm",
             "last-assistant-message": "one\n\n- two\n```bash\nrm -f /tmp/x\n```",
         })
-        self.assertIn("结果：\n\none\n\n- two\nrm -f /tmp/x", message)
-        self.assertNotIn("```", message)
+        self.assertIn(
+            "结果：\n\none\n\n- two\n```bash\nrm -f /tmp/x\n```",
+            message,
+        )
         self.assertEqual("a\n\nb", format_result("a\n\nb"))
+        self.assertEqual(
+            "```text\na\n```", format_result("```text\na\n```")
+        )
 
     def test_only_completion_hooks_are_gated(self):
         source = '''{

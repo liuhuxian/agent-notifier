@@ -16,9 +16,11 @@ from .config import NotifierConfig, Paths
 from .feishu import (
     remove_message_reaction,
     send_approval_card,
+    send_markdown_message,
     send_progress_message_with_onit,
     send_text_message,
 )
+from .native_hooks import format_result
 from .proxy import AppServerProxy, approval_short_id
 from .registry import SessionRegistry
 
@@ -176,12 +178,12 @@ class SharedService:
                 "no Feishu route for terminal completion: thread=%s", thread_id
             )
             return
-        result = text.strip() or "(无文本输出)"
+        result = format_result(text) or "(无文本输出)"
         message = (
             "Codex 回合已完成\n"
             f"会话：{mapping.session_label} | {mapping.short_thread_id}\n"
             f"目录：{mapping.cwd}\n"
-            f"结果：\n{result}"
+            f"结果：\n\n{result}"
         )
         await self._send_to_notification_route("default", message)
 
@@ -369,7 +371,12 @@ class SharedService:
         self, name: str, message: str
     ) -> None:
         route = self._notification_route(name)
-        await send_text_message(
+        sender = (
+            send_markdown_message
+            if route.message_format == "markdown"
+            else send_text_message
+        )
+        await sender(
             project=route.project,
             receive_id=route.receive_id,
             receive_id_type=route.receive_id_type,

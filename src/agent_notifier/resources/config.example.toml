@@ -25,3 +25,4 @@ notify_interruption = true
 # project = "le-wm-codex"
 # receive_id_type = "chat_id"
 # receive_id = "oc_your_notification_group_chat_id"
+# message_format = "markdown" # or "text"

@@ -25,7 +25,7 @@ from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
 from .codex.sessions import discover_rollout_thread_ids
 from .config import NotifierConfig, Paths, initialize_user_config
-from .feishu import reply_approval_result_card, send_text_message
+from .feishu import reply_approval_result_card, send_markdown_message, send_text_message
 from .hook_config import (
     decode_command,
     default_hooks_path,
@@ -65,7 +65,12 @@ async def send_configured_notification(
         )
     if not text.strip():
         raise ValueError("notification text is empty")
-    return await send_text_message(
+    sender = (
+        send_markdown_message
+        if route.message_format == "markdown"
+        else send_text_message
+    )
+    return await sender(
         project=route.project,
         receive_id=route.receive_id,
         receive_id_type=route.receive_id_type,

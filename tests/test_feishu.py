@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -7,6 +8,7 @@ from agent_notifier.feishu import (
     build_approval_card,
     build_approval_result_card,
     load_feishu_settings,
+    send_markdown_message,
     send_text_message,
 )
 
@@ -130,6 +132,44 @@ class FeishuMessageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             "oc_notify", post_json.await_args.args[2]["receive_id"]
         )
+
+    async def test_markdown_message_uses_interactive_markdown_card(self):
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch(
+            "agent_notifier.feishu.load_feishu_settings",
+            return_value={
+                "app_id": "app",
+                "app_secret": "secret",
+                "domain": "https://open.feishu.cn",
+            },
+        ), patch(
+            "agent_notifier.feishu.ClientSession",
+            return_value=FakeSession(),
+        ), patch(
+            "agent_notifier.feishu._tenant_access_token",
+            new=AsyncMock(return_value="token"),
+        ), patch(
+            "agent_notifier.feishu._post_json",
+            new=AsyncMock(return_value={"data": {"message_id": "om_card"}}),
+        ) as post_json:
+            message_id = await send_markdown_message(
+                project="le-wm-codex",
+                receive_id="oc_notify",
+                receive_id_type="chat_id",
+                text="```text\nhello\n```",
+            )
+
+        self.assertEqual("om_card", message_id)
+        payload = post_json.await_args.args[2]
+        self.assertEqual("interactive", payload["msg_type"])
+        card = json.loads(payload["content"])
+        self.assertEqual("```text\nhello\n```", card["elements"][0]["content"])
 
 
 if __name__ == "__main__":

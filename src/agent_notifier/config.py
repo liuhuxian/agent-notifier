@@ -47,6 +47,7 @@ class NotificationRoute:
     project: str
     receive_id: str
     receive_id_type: str = "chat_id"
+    message_format: str = "text"
 
     @classmethod
     def from_mapping(
@@ -57,6 +58,7 @@ class NotificationRoute:
         receive_id_type = str(
             values.get("receive_id_type", "chat_id")
         ).strip()
+        message_format = str(values.get("message_format", "text")).strip()
         if not project:
             raise ValueError(
                 f"notification route {name!r} requires project"
@@ -70,7 +72,12 @@ class NotificationRoute:
                 f"notification route {name!r} has unsupported "
                 f"receive_id_type: {receive_id_type}"
             )
-        return cls(project, receive_id, receive_id_type)
+        if message_format not in {"text", "markdown"}:
+            raise ValueError(
+                f"notification route {name!r} has unsupported "
+                f"message_format: {message_format}"
+            )
+        return cls(project, receive_id, receive_id_type, message_format)
 
 
 @dataclass(frozen=True)

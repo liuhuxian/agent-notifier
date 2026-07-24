@@ -104,9 +104,10 @@ class CodexBindingTest(unittest.TestCase):
                 'project = "le-wm-codex"\n'
                 'receive_id_type = "chat_id"\n'
                 'receive_id = "oc_notify"\n'
+                'message_format = "markdown"\n'
             )
             with patch(
-                "agent_notifier.cli.send_text_message",
+                "agent_notifier.cli.send_markdown_message",
                 new=AsyncMock(return_value="om_notify"),
             ) as send_message:
                 message_id = asyncio.run(

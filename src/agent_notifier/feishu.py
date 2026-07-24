@@ -248,6 +248,38 @@ async def send_text_message(
         return message_id
 
 
+async def send_markdown_message(
+    project: str,
+    receive_id: str,
+    receive_id_type: str,
+    text: str,
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> str:
+    """Send Markdown through a text-only interactive card."""
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        card = {
+            "config": {"wide_screen_mode": True},
+            "elements": [{"tag": "markdown", "content": text}],
+        }
+        sent = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages"
+            f"?receive_id_type={receive_id_type}",
+            {
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            token,
+        )
+        message_id = str(sent.get("data", {}).get("message_id", ""))
+        if not message_id:
+            raise RuntimeError("Feishu API did not return message_id")
+        return message_id
+
+
 async def remove_message_reaction(
     project: str,
     message_id: str,
