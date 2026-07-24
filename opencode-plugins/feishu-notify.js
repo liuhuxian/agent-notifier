@@ -1,4 +1,7 @@
-const IS_ACP_MODE = process.argv?.includes('acp') ?? false
+const NOTIFY_DISABLED = (
+  (process.argv?.includes('acp') ?? false) ||
+  (process.env?.LEWM_NOTIFY_DISABLE === '1')
+)
 
 const MAX_CHUNK = 30000
 
@@ -65,9 +68,15 @@ function chunkText(text, maxLen) {
   return chunks
 }
 
+const NOTIFY_SESSION = process.env?.LEWM_NOTIFY_SESSION || ""
+
 async function sendMessage(fn$, message) {
   try {
-    await fn$`cc-connect send -m ${message}`.quiet()
+    if (NOTIFY_SESSION) {
+      await fn$`cc-connect send -s ${NOTIFY_SESSION} -m ${message}`.quiet()
+    } else {
+      await fn$`cc-connect send -m ${message}`.quiet()
+    }
   } catch {
     // cc-connect not available, silently skip
   }
@@ -117,7 +126,7 @@ export const FeishuNotify = async ({ $, client, directory }) => {
       const type = event?.type
       if (!type) return
 
-      if (IS_ACP_MODE && (type === "session.idle" || type === "permission.asked")) {
+      if (NOTIFY_DISABLED && (type === "session.idle" || type === "permission.asked")) {
         return
       }
 

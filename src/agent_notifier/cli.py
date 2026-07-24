@@ -570,6 +570,55 @@ async def run_acp_opencode(paths: Paths, base_url: str) -> None:
         registry.close()
 
 
+async def run_acp_multi(paths: Paths, base_url: str) -> None:
+    from .multi_backend import MultiBackendDispatcher, _load_chat_routes
+    from .opencode.backend import OpencodeBackend
+    from .opencode.client import OpencodeClient
+
+    ensure_service(paths)
+    codex_rpc = CodexAppServerClient(paths.proxy_socket, "cc_connect")
+    await codex_rpc.connect()
+
+    opencode_client = OpencodeClient(base_url)
+    await opencode_client.connect()
+    await opencode_client.start_sse()
+
+    registry = SessionRegistry(paths.state_db)
+    config = NotifierConfig.load(paths.config_file)
+    chat_routes = _load_chat_routes(paths.config_file)
+    server_ref: dict = {}
+
+    async def request_permission(params: dict) -> dict:
+        server = server_ref.get("server")
+        if server is None:
+            return {"outcome": {"outcome": "cancelled"}}
+        return await server.call_client("session/request_permission", params)
+
+    codex_backend = CodexBackend(codex_rpc, registry, config.progress)
+    opencode_backend = OpencodeBackend(
+        opencode_client, registry, request_permission, config.progress
+    )
+
+    dispatcher = MultiBackendDispatcher(
+        codex_backend,
+        opencode_backend,
+        registry,
+        chat_routes,
+        config_path=paths.config_file,
+    )
+
+    server = ACPStdioServer(dispatcher, sys.stdin, sys.stdout)
+    codex_rpc.set_server_request_handler(server.handle_codex_request)
+    server_ref["server"] = server
+
+    try:
+        await server.run()
+    finally:
+        await dispatcher.close()
+        registry.close()
+        await codex_rpc.close()
+
+
 def configure_cc(paths: Paths, project: str, config_path: Path) -> Path:
     paths.ensure_directories()
     source = config_path.read_text()
@@ -638,7 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     acp = sub.add_parser("acp", help="run the cc-connect ACP stdio adapter")
     acp.add_argument(
         "--backend",
-        choices=("codex", "opencode"),
+        choices=("codex", "opencode", "multi"),
         default="codex",
         help="agent backend implementation (default: codex)",
     )
@@ -743,6 +792,8 @@ def main() -> None:
             check_versions(require_cc=True)
             if args.backend == "opencode":
                 asyncio.run(run_acp_opencode(paths, args.opencode_url))
+            elif args.backend == "multi":
+                asyncio.run(run_acp_multi(paths, args.opencode_url))
             else:
                 asyncio.run(run_acp(paths))
         elif args.command == "codex":
