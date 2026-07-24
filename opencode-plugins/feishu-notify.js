@@ -1,7 +1,4 @@
-const NOTIFY_DISABLED = (
-  (process.argv?.includes('acp') ?? false) ||
-  (process.env?.LEWM_NOTIFY_DISABLE === '1')
-)
+const IS_ACP_MODE = process.argv?.includes('acp') ?? false
 
 const MAX_CHUNK = 30000
 
@@ -122,7 +119,7 @@ export const FeishuNotify = async ({ $, client, directory }) => {
       const type = event?.type
       if (!type) return
 
-      if (NOTIFY_DISABLED && (type === "session.idle" || type === "permission.asked")) {
+      if (IS_ACP_MODE && (type === "session.idle" || type === "permission.asked")) {
         return
       }
 
