@@ -23,7 +23,7 @@ from .cc_config import configure_project
 from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
 from .codex.sessions import discover_rollout_thread_ids
-from .config import Paths
+from .config import NotifierConfig, Paths, initialize_user_config
 from .feishu import reply_approval_result_card
 from .hook_config import decode_command, default_hooks_path, gate_hooks
 from .registry import SessionRegistry
@@ -529,7 +529,8 @@ async def run_acp(paths: Paths) -> None:
     rpc = CodexAppServerClient(paths.proxy_socket, "cc_connect")
     await rpc.connect()
     registry = SessionRegistry(paths.state_db)
-    backend = CodexBackend(rpc, registry)
+    config = NotifierConfig.load(paths.config_file)
+    backend = CodexBackend(rpc, registry, config.progress)
     server = ACPStdioServer(backend, sys.stdin, sys.stdout)
     rpc.set_server_request_handler(server.handle_codex_request)
     try:
@@ -544,7 +545,8 @@ def configure_cc(paths: Paths, project: str, config_path: Path) -> Path:
     paths.ensure_directories()
     source = config_path.read_text()
     command = shutil.which("agent-notifier") or str(Path(sys.argv[0]).resolve())
-    updated = configure_project(source, project, command)
+    config = NotifierConfig.load(paths.config_file)
+    updated = configure_project(source, project, command, config.progress)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     backup = config_path.with_name(f"{config_path.name}.agent-notifier.{timestamp}.bak")
     shutil.copy2(config_path, backup)
@@ -666,6 +668,10 @@ def build_parser() -> argparse.ArgumentParser:
     decide.add_argument("approval_id")
     sub.add_parser("status", help="show service status")
     sub.add_parser("doctor", help="validate versions, paths, and service")
+    sub.add_parser(
+        "init-config",
+        help="create the default Agent Notifier config if it is missing",
+    )
     logs = sub.add_parser("logs", help="follow service logs")
     logs.add_argument("--no-follow", action="store_true")
     configure = sub.add_parser("configure-cc", help="configure one cc-connect project")
@@ -819,6 +825,10 @@ def main() -> None:
             print(f"state: {paths.state_dir}")
             print(f"runtime: {paths.runtime_dir}")
             print(f"service: {'running' if _socket_ready(paths.proxy_socket) else 'stopped'}")
+        elif args.command == "init-config":
+            initialized = initialize_user_config(paths)
+            state = "created" if initialized.created else "exists"
+            print(f"{state}: {initialized.path}")
         elif args.command == "logs":
             journalctl = shutil.which("journalctl")
             if journalctl:

@@ -1,0 +1,19 @@
+# Agent Notifier runtime configuration.
+# This file is copied to ~/.config/agent-notifier/config.toml on first install.
+
+[progress]
+# Add cc-connect's OnIt reaction as soon as a Feishu task is received.
+onit = true
+
+# Show thinking/tool/test phase transitions in a cc-connect progress card.
+progress_card = true
+
+# Show user-visible assistant text while the final response is being generated.
+stream_preview = false
+stream_update_interval_ms = 2000
+
+# Move an OnIt reaction to each new intermediate message from a Feishu turn.
+moving_onit = true
+
+# Report an active turn that ends because the App Server stops unexpectedly.
+notify_interruption = true

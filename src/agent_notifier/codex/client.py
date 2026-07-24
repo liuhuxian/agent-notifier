@@ -92,6 +92,14 @@ class CodexAppServerClient:
             for future in self._pending.values():
                 if not future.done():
                     future.set_exception(CodexRPCError("connection closed"))
+            await self._events.put(
+                {
+                    "method": "agent-notifier/connectionClosed",
+                    "params": {
+                        "message": "Codex App Server connection closed"
+                    },
+                }
+            )
 
     async def _handle_server_request(self, payload: dict) -> None:
         try:

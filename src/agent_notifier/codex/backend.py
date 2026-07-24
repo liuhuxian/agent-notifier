@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from agent_notifier.config import ProgressConfig
 from agent_notifier.registry import SessionRegistry
 
 
@@ -16,9 +17,15 @@ class RPCClient(Protocol):
 
 
 class CodexBackend:
-    def __init__(self, rpc: RPCClient, registry: SessionRegistry):
+    def __init__(
+        self,
+        rpc: RPCClient,
+        registry: SessionRegistry,
+        progress: ProgressConfig | None = None,
+    ):
         self.rpc = rpc
         self.registry = registry
+        self.progress = progress or ProgressConfig()
         self.active_turns: dict[str, str] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self._dispatcher: asyncio.Task | None = None
@@ -49,6 +56,11 @@ class CodexBackend:
             event = await self.rpc.next_event()
             method = event.get("method")
             params = event.get("params") or {}
+            if method == "agent-notifier/connectionClosed":
+                for queues in list(self._subscribers.values()):
+                    for queue in list(queues):
+                        await queue.put(event)
+                return
             thread_id = params.get("threadId")
             if method == "turn/started" and thread_id:
                 turn = params.get("turn") or {}
@@ -115,6 +127,8 @@ class CodexBackend:
         input_items = [{"type": "text", "text": text, "text_elements": []}]
         final_text: str | None = None
         fallback_text: str | None = None
+        item_phases: dict[str, str | None] = {}
+        streamed_final = False
         try:
             active_turn = self.active_turns.get(thread_id)
             if active_turn:
@@ -141,10 +155,69 @@ class CodexBackend:
             while True:
                 event = await queue.get()
                 params = event.get("params") or {}
+                if event.get("method") == "agent-notifier/connectionClosed":
+                    raise RuntimeError(
+                        params.get("message")
+                        or "Codex App Server connection closed"
+                    )
                 if params.get("turnId") not in {None, turn_id}:
                     continue
-                if event.get("method") == "item/completed":
+                method = event.get("method")
+                if method == "turn/started":
+                    if self.progress.progress_card:
+                        await emit({"kind": "status", "text": "正在思考"})
+                elif method == "item/started":
                     item = params.get("item") or {}
+                    item_id = item.get("id")
+                    if item_id:
+                        item_phases[item_id] = item.get("phase")
+                    if (
+                        self.progress.progress_card
+                        and item.get("type") == "commandExecution"
+                        and item_id
+                    ):
+                        command = item.get("command") or ""
+                        if isinstance(command, list):
+                            command = " ".join(
+                                str(part) for part in command
+                            )
+                        command = str(command)
+                        await emit({
+                            "kind": "tool_start",
+                            "tool_call_id": item_id,
+                            "title": self._tool_title(command),
+                            "tool_kind": "execute",
+                            "raw_input": {"command": command},
+                        })
+                elif method == "item/agentMessage/delta":
+                    item_id = params.get("itemId")
+                    delta = params.get("delta")
+                    if (
+                        self.progress.stream_preview
+                        and delta
+                        and item_phases.get(item_id) == "final_answer"
+                    ):
+                        streamed_final = True
+                        await emit({"kind": "text", "text": delta})
+                elif method == "item/completed":
+                    item = params.get("item") or {}
+                    item_id = item.get("id")
+                    if (
+                        self.progress.progress_card
+                        and item.get("type") == "commandExecution"
+                        and item_id
+                    ):
+                        status = item.get("status")
+                        await emit({
+                            "kind": "tool_complete",
+                            "tool_call_id": item_id,
+                            "status": (
+                                "failed"
+                                if status in {"failed", "declined"}
+                                else "completed"
+                            ),
+                        })
+                        continue
                     if item.get("type") != "agentMessage":
                         continue
                     item_text = item.get("text")
@@ -161,7 +234,7 @@ class CodexBackend:
                     status = turn.get("status")
                     if status == "completed":
                         response_text = final_text or fallback_text
-                        if response_text:
+                        if response_text and not streamed_final:
                             await emit(
                                 {"kind": "text", "text": response_text}
                             )
@@ -175,6 +248,19 @@ class CodexBackend:
             self._subscribers[thread_id].remove(queue)
             if not self._subscribers[thread_id]:
                 del self._subscribers[thread_id]
+
+    @staticmethod
+    def _tool_title(command: str) -> str:
+        lowered = command.lower()
+        test_markers = (
+            "pytest",
+            "unittest",
+            "smoke_test",
+            "run_all_verifications",
+        )
+        if any(marker in lowered for marker in test_markers):
+            return "正在运行测试"
+        return "正在执行工具"
 
     async def cancel(self, thread_id: str) -> None:
         turn_id = self.active_turns.get(thread_id)

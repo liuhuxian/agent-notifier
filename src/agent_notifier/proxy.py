@@ -500,6 +500,10 @@ class AppServerProxy:
         elif origin == "cc_connect" and self.on_remote_completion:
             await self.on_remote_completion(thread_id, text)
 
+    def active_turns(self) -> list[tuple[str, str]]:
+        """Return thread origins whose turn has not completed."""
+        return list(self._thread_origins.items())
+
     async def close(self) -> None:
         if self.runner:
             await self.runner.cleanup()

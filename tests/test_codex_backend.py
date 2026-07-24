@@ -228,6 +228,114 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual("end_turn", result["stopReason"])
 
+    async def test_prompt_emits_safe_progress_tool_and_stream_events(self):
+        output = []
+
+        async def emit(event):
+            output.append(event)
+
+        task = asyncio.create_task(
+            self.backend.prompt("thread-1", "hello", "cc_connect", emit)
+        )
+        await asyncio.sleep(0)
+        events = [
+            {
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-new", "status": "inProgress"},
+                },
+            },
+            {
+                "method": "item/started",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "id": "command-1",
+                        "type": "commandExecution",
+                        "command": "pytest -q",
+                    },
+                },
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "id": "command-1",
+                        "type": "commandExecution",
+                        "status": "completed",
+                    },
+                },
+            },
+            {
+                "method": "item/started",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "id": "answer-1",
+                        "type": "agentMessage",
+                        "phase": "final_answer",
+                    },
+                },
+            },
+            {
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "itemId": "answer-1",
+                    "delta": "done",
+                },
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-new",
+                    "item": {
+                        "id": "answer-1",
+                        "type": "agentMessage",
+                        "phase": "final_answer",
+                        "text": "done",
+                    },
+                },
+            },
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-new", "status": "completed"},
+                },
+            },
+        ]
+        for event in events:
+            await self.rpc.events.put(event)
+
+        await asyncio.wait_for(task, 1)
+        self.assertEqual(
+            [
+                {"kind": "status", "text": "正在思考"},
+                {
+                    "kind": "tool_start",
+                    "tool_call_id": "command-1",
+                    "title": "正在运行测试",
+                    "tool_kind": "execute",
+                    "raw_input": {"command": "pytest -q"},
+                },
+                {
+                    "kind": "tool_complete",
+                    "tool_call_id": "command-1",
+                    "status": "completed",
+                },
+                {"kind": "text", "text": "done"},
+            ],
+            output,
+        )
+
     async def test_active_turn_uses_steer(self):
         self.backend.active_turns["thread-1"] = "turn-active"
 
@@ -273,6 +381,26 @@ class CodexBackendTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         with self.assertRaisesRegex(RuntimeError, "workspace is out of credits"):
+            await asyncio.wait_for(task, 1)
+
+    async def test_connection_loss_unblocks_active_prompt(self):
+        async def emit(_event):
+            pass
+
+        task = asyncio.create_task(
+            self.backend.prompt("thread-1", "hello", "cc_connect", emit)
+        )
+        await asyncio.sleep(0)
+        await self.rpc.events.put(
+            {
+                "method": "agent-notifier/connectionClosed",
+                "params": {"message": "Codex App Server connection closed"},
+            }
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError, "Codex App Server connection closed"
+        ):
             await asyncio.wait_for(task, 1)
 
 

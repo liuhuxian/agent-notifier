@@ -12,8 +12,12 @@ import shutil
 from pathlib import Path
 
 from .approvals import ApprovalStore
-from .config import Paths
-from .feishu import send_approval_card
+from .config import NotifierConfig, Paths
+from .feishu import (
+    remove_message_reaction,
+    send_approval_card,
+    send_progress_message_with_onit,
+)
 from .proxy import AppServerProxy, approval_short_id
 from .registry import SessionRegistry
 
@@ -75,11 +79,15 @@ class SharedService:
     def __init__(self, paths: Paths, codex_binary: str = "codex"):
         self.paths = paths
         self.codex_binary = codex_binary
+        self.config = NotifierConfig.load(paths.config_file)
         self.stop_event = asyncio.Event()
         self.process: asyncio.subprocess.Process | None = None
         self.proxy: AppServerProxy | None = None
         self.registry: SessionRegistry | None = None
         self.approval_store: ApprovalStore | None = None
+        self._remote_progress_onit: dict[
+            str, tuple[str, str, str]
+        ] = {}
 
     async def run(self) -> None:
         self.paths.ensure_directories()
@@ -113,6 +121,7 @@ class SharedService:
                         self.paths.proxy_socket,
                         self.paths.upstream_socket,
                         on_terminal_completion=self._notify_terminal_completion,
+                        on_remote_completion=self._finish_remote_progress,
                         on_remote_progress=self._notify_remote_progress,
                         approval_store=self.approval_store,
                         on_approval_request=self._notify_approval_request,
@@ -130,6 +139,14 @@ class SharedService:
                     await asyncio.gather(*pending, return_exceptions=True)
                     if stop_done in done:
                         break
+                    if (
+                        process_done in done
+                        and self.config.progress.notify_interruption
+                    ):
+                        await self._notify_interrupted_turns(
+                            self.proxy.active_turns(),
+                            process_done.result(),
+                        )
                 finally:
                     if self.proxy:
                         await self.proxy.close()
@@ -139,6 +156,7 @@ class SharedService:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30)
         finally:
+            await self._clear_all_remote_progress()
             await self._stop_child()
             if self.registry:
                 self.registry.close()
@@ -166,6 +184,33 @@ class SharedService:
         )
         await self._send_to_mapping(mapping, message)
 
+    async def _notify_interrupted_turns(
+        self,
+        active_turns: list[tuple[str, str]],
+        returncode: int | None,
+    ) -> None:
+        for thread_id, _origin in active_turns:
+            await self._clear_remote_progress(thread_id)
+            mapping = (
+                self.registry.find_by_thread(thread_id)
+                if self.registry
+                else None
+            )
+            if mapping is None:
+                logger.warning(
+                    "no Feishu route for interrupted turn: thread=%s",
+                    thread_id,
+                )
+                continue
+            message = (
+                "Codex 回合异常中断\n"
+                f"会话：{mapping.session_label} | {mapping.short_thread_id}\n"
+                f"目录：{mapping.cwd}\n"
+                f"App Server 退出码：{returncode}\n"
+                "Agent Notifier 将自动重启服务；请确认任务状态后重试。"
+            )
+            await self._send_to_mapping(mapping, message)
+
     async def _record_token_usage(
         self, thread_id: str, token_usage: dict
     ) -> None:
@@ -179,7 +224,77 @@ class SharedService:
                 "no Feishu route for remote progress: thread=%s", thread_id
             )
             return
-        await self._send_to_mapping(mapping, text.strip())
+        if not self.config.progress.moving_onit:
+            await self._send_to_mapping(mapping, text.strip())
+            return
+        receive_id = mapping.external_key.rsplit(":", 1)[-1]
+        try:
+            message_id, reaction_id = (
+                await send_progress_message_with_onit(
+                    project=mapping.project,
+                    receive_id=receive_id,
+                    text=text.strip(),
+                )
+            )
+        except Exception:
+            logger.exception(
+                "moving OnIt send failed; falling back to cc-connect: "
+                "thread=%s",
+                thread_id,
+            )
+            await self._send_to_mapping(mapping, text.strip())
+            return
+        previous = self._remote_progress_onit.get(thread_id)
+        self._remote_progress_onit[thread_id] = (
+            mapping.project,
+            message_id,
+            reaction_id,
+        )
+        if previous:
+            try:
+                await self._remove_remote_progress_reaction(previous)
+            except Exception:
+                logger.exception(
+                    "failed to remove previous progress reaction: "
+                    "thread=%s",
+                    thread_id,
+                )
+
+    async def _finish_remote_progress(
+        self, thread_id: str, _text: str
+    ) -> None:
+        await self._clear_remote_progress(thread_id)
+
+    async def _clear_remote_progress(self, thread_id: str) -> None:
+        current = self._remote_progress_onit.pop(thread_id, None)
+        if current:
+            try:
+                await self._remove_remote_progress_reaction(current)
+            except Exception:
+                logger.exception(
+                    "failed to clear remote progress reaction: thread=%s",
+                    thread_id,
+                )
+
+    async def _clear_all_remote_progress(self) -> None:
+        current = list(self._remote_progress_onit.values())
+        self._remote_progress_onit.clear()
+        for reaction in current:
+            try:
+                await self._remove_remote_progress_reaction(reaction)
+            except Exception:
+                logger.exception("failed to clear remote progress reaction")
+
+    @staticmethod
+    async def _remove_remote_progress_reaction(
+        reaction: tuple[str, str, str]
+    ) -> None:
+        project, message_id, reaction_id = reaction
+        await remove_message_reaction(
+            project=project,
+            message_id=message_id,
+            reaction_id=reaction_id,
+        )
 
     async def _notify_approval_request(self, token: str, request: dict) -> None:
         params = request.get("params") or {}

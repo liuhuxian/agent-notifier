@@ -62,7 +62,16 @@ agent-notifier doctor
   ACP 返回 cc-connect，由 cc-connect 发送并写入会话历史，避免重复回复和
   Reply chain 中的 `(empty response)`。
 - 飞书来源的中间进度在每个完整 commentary 消息结束后投递一次，不发送
-  token 级碎片，并按 thread/turn/item 去重。
+  token 级碎片，并按 thread/turn/item 去重。每条新中间消息会获得 `OnIt`
+  reaction，并删除上一条中间消息的 reaction，使最新进度始终可见。
+- cc-connect 收到任务后立即在用户原消息上添加 `OnIt` 表情；该 reaction 仍由
+  cc-connect 在回合结束时移除，与中间消息上移动的 `OnIt` 相互独立。
+- Codex 的思考、工具执行和测试阶段通过标准 ACP 事件更新同一张进度卡片。
+  流式正文预览保留为可选能力，默认关闭。
+- Agent Notifier 不转发模型内部推理文本，只发送“正在思考”“正在执行工具”
+  “正在运行测试”等安全状态，以及用户最终可见的回复文本。
+- App Server 在活动 turn 中异常退出时，Agent Notifier 会发送明确的中断通知，
+  随后自动重启共享服务。
 
 ## 安装
 
@@ -85,8 +94,12 @@ CI、容器或不希望立即安装服务时：
 ```text
 ~/.local/bin/agent-notifier
 ~/.local/share/agent-notifier/venv/
+~/.config/agent-notifier/config.toml
 ~/.config/systemd/user/agent-notifier.service
 ```
+
+安装包内包含带注释的默认配置模板。首次安装会复制到
+`~/.config/agent-notifier/config.toml`；重复安装不会覆盖用户已有配置。
 
 运行状态不会写回 Git 仓库：
 
@@ -122,6 +135,32 @@ agent-notifier configure-hooks
 审批重复触发。其他 hook 类型不会修改。
 
 ## 配置 cc-connect
+
+Agent Notifier 的显示配置位于：
+
+```toml
+[progress]
+onit = true
+progress_card = true
+stream_preview = false
+stream_update_interval_ms = 2000
+moving_onit = true
+notify_interruption = true
+```
+
+- `onit`：收到飞书任务后立即添加 `OnIt` 表情。
+- `progress_card`：展示思考、工具执行和测试阶段。
+- `stream_preview`：逐步展示用户最终可见的回复正文。
+- `moving_onit`：将 `OnIt` 移到飞书 turn 最新的中间回复；最终完成、中断或服务
+  退出时移除。
+- `notify_interruption`：App Server 异常退出时发送中断通知。
+
+修改配置后重新运行 `configure-cc`，再重启 cc-connect，使飞书显示设置生效：
+
+```bash
+agent-notifier configure-cc --project le-wm-codex
+cc-connect daemon restart
+```
 
 先查看项目名：
 

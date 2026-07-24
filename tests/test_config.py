@@ -1,0 +1,69 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from agent_notifier.config import (
+    NotifierConfig,
+    Paths,
+    initialize_user_config,
+)
+
+
+def make_paths(root: Path) -> Paths:
+    return Paths(
+        config_dir=root / "config",
+        state_dir=root / "state",
+        runtime_dir=root / "run",
+        log_dir=root / "state/logs",
+        proxy_socket=root / "run/proxy.sock",
+        upstream_socket=root / "run/upstream.sock",
+        state_db=root / "state/state.sqlite3",
+        pid_file=root / "run/service.pid",
+        lock_file=root / "run/service.lock",
+    )
+
+
+class NotifierConfigTest(unittest.TestCase):
+    def test_missing_config_uses_documented_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = NotifierConfig.load(Path(tmp) / "missing.toml")
+
+        self.assertTrue(config.progress.onit)
+        self.assertTrue(config.progress.progress_card)
+        self.assertFalse(config.progress.stream_preview)
+        self.assertEqual(2000, config.progress.stream_update_interval_ms)
+        self.assertTrue(config.progress.notify_interruption)
+        self.assertTrue(config.progress.moving_onit)
+
+    def test_partial_config_overrides_only_selected_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                "[progress]\n"
+                "progress_card = false\n"
+                "stream_update_interval_ms = 3500\n"
+                "moving_onit = false\n"
+            )
+            config = NotifierConfig.load(path)
+
+        self.assertFalse(config.progress.progress_card)
+        self.assertFalse(config.progress.stream_preview)
+        self.assertEqual(3500, config.progress.stream_update_interval_ms)
+        self.assertFalse(config.progress.moving_onit)
+
+    def test_initialize_config_is_idempotent_and_preserves_user_edits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            first = initialize_user_config(paths)
+            self.assertTrue(first.created)
+            self.assertIn("[progress]", first.path.read_text())
+
+            first.path.write_text("[progress]\nonit = false\n")
+            second = initialize_user_config(paths)
+
+            self.assertFalse(second.created)
+            self.assertEqual("[progress]\nonit = false\n", second.path.read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()

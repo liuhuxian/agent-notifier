@@ -23,6 +23,19 @@ class FakeBackend:
 
     async def prompt(self, thread_id, text, origin, emit):
         self.prompts.append((thread_id, text, origin))
+        await emit({"kind": "status", "text": "正在思考"})
+        await emit({
+            "kind": "tool_start",
+            "tool_call_id": "tool-1",
+            "title": "正在运行测试",
+            "tool_kind": "execute",
+            "raw_input": {"command": "pytest -q"},
+        })
+        await emit({
+            "kind": "tool_complete",
+            "tool_call_id": "tool-1",
+            "status": "completed",
+        })
         await emit({"kind": "text", "text": "hello "})
         await emit({"kind": "text", "text": "world"})
         return {"stopReason": "end_turn"}
@@ -78,9 +91,17 @@ class ACPHandlerTest(unittest.IsolatedAsyncioTestCase):
             params["update"]["content"]["text"]
             for method, params in self.events
             if method == "session/update"
+            and params["update"]["sessionUpdate"] == "agent_message_chunk"
         ]
         self.assertEqual(["hello ", "world"], chunks)
         self.assertEqual([("thread-old", "go", "cc_connect")], self.backend.prompts)
+
+        updates = [params["update"] for method, params in self.events]
+        self.assertEqual("agent_thought_chunk", updates[0]["sessionUpdate"])
+        self.assertEqual("tool_call", updates[1]["sessionUpdate"])
+        self.assertEqual("in_progress", updates[1]["status"])
+        self.assertEqual("tool_call_update", updates[2]["sessionUpdate"])
+        self.assertEqual("completed", updates[2]["status"])
 
     async def test_prompt_uses_active_target_but_keeps_cc_session_for_updates(self):
         await self.handler.request("session/load", {"sessionId": "thread-cc"})

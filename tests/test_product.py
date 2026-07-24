@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_notifier.cc_config import configure_project
-from agent_notifier.config import Paths
+from agent_notifier.config import Paths, ProgressConfig
 from agent_notifier.hook_config import decode_command, gate_hooks
 from agent_notifier.service import format_approval_message
 from agent_notifier.versioning import parse_codex_version, parse_cc_connect_version
@@ -123,6 +123,58 @@ exec = "python3 old.py deny {{1}}"
         self.assertEqual(1, once.count('name = "agent-switch"'))
         self.assertEqual(1, once.count('name = "agent-cmd"'))
         self.assertEqual(1, once.count('name = "agent-help"'))
+
+    def test_progress_settings_are_applied_to_target_platform_and_global_preview(self):
+        source = '''
+[[projects]]
+name = "le-wm"
+[projects.agent]
+type = "codex"
+[[projects.platforms]]
+type = "feishu"
+[projects.platforms.options]
+app_id = "cli_x"
+app_secret = "secret"
+'''
+        settings = ProgressConfig(
+            onit=True,
+            progress_card=True,
+            stream_preview=True,
+            stream_update_interval_ms=1800,
+            notify_interruption=True,
+        )
+
+        result = configure_project(
+            source, "le-wm", "/opt/agent-notifier", settings
+        )
+
+        self.assertIn('reaction_emoji = "OnIt"', result)
+        self.assertIn('progress_style = "card"', result)
+        self.assertIn("[stream_preview]", result)
+        self.assertIn("enabled = true", result)
+        self.assertIn("interval_ms = 1800", result)
+        self.assertIn("min_delta_chars = 1", result)
+        self.assertIn("[projects.display]", result)
+        self.assertIn("thinking_messages = true", result)
+        self.assertIn("tool_messages = true", result)
+
+    def test_disabling_progress_hides_thinking_and_tool_messages(self):
+        source = '''
+[[projects]]
+name = "le-wm"
+[projects.agent]
+type = "codex"
+'''
+        result = configure_project(
+            source,
+            "le-wm",
+            "/opt/agent-notifier",
+            ProgressConfig(progress_card=False),
+        )
+
+        self.assertIn("[projects.display]", result)
+        self.assertIn("thinking_messages = false", result)
+        self.assertIn("tool_messages = false", result)
 
 
 class ApprovalMessageTest(unittest.TestCase):

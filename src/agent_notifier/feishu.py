@@ -154,6 +154,90 @@ async def _post_json(
         return result
 
 
+async def _delete_json(
+    session: ClientSession,
+    url: str,
+    token: str,
+) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {token}"}
+    async with session.delete(url, headers=headers, timeout=10) as response:
+        result = await response.json()
+        if response.status >= 400 or result.get("code", 0) != 0:
+            raise RuntimeError(
+                f"Feishu API failed: http={response.status} "
+                f"code={result.get('code')} msg={result.get('msg')}"
+            )
+        return result
+
+
+async def _tenant_access_token(
+    session: ClientSession,
+    settings: dict[str, str],
+) -> str:
+    auth = await _post_json(
+        session,
+        f"{settings['domain']}/open-apis/auth/v3/tenant_access_token/internal",
+        {"app_id": settings["app_id"], "app_secret": settings["app_secret"]},
+    )
+    token = auth.get("tenant_access_token")
+    if not token:
+        raise RuntimeError("Feishu API did not return tenant_access_token")
+    return str(token)
+
+
+async def send_progress_message_with_onit(
+    project: str,
+    receive_id: str,
+    text: str,
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> tuple[str, str]:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        sent = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages"
+            "?receive_id_type=open_id",
+            {
+                "receive_id": receive_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": text}, ensure_ascii=False),
+            },
+            token,
+        )
+        message_id = str(sent.get("data", {}).get("message_id", ""))
+        if not message_id:
+            raise RuntimeError("Feishu API did not return message_id")
+        reacted = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages/"
+            f"{message_id}/reactions",
+            {"reaction_type": {"emoji_type": "OnIt"}},
+            token,
+        )
+        reaction_id = str(reacted.get("data", {}).get("reaction_id", ""))
+        if not reaction_id:
+            raise RuntimeError("Feishu API did not return reaction_id")
+        return message_id, reaction_id
+
+
+async def remove_message_reaction(
+    project: str,
+    message_id: str,
+    reaction_id: str,
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> None:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        await _delete_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages/"
+            f"{message_id}/reactions/{reaction_id}",
+            token,
+        )
+
+
 async def send_approval_card(
     project: str,
     receive_id: str,

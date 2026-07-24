@@ -102,17 +102,64 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
                 "019e81c0-c415",
                 "/users/huxian/project/le-wm",
             )
-            service._send_to_mapping = AsyncMock()
 
-            await service._notify_remote_progress(
-                "019e81c0-c415", "阶段分析完成"
-            )
+            with patch(
+                "agent_notifier.service.send_progress_message_with_onit",
+                new=AsyncMock(
+                    side_effect=[
+                        ("om_progress_1", "reaction_1"),
+                        ("om_progress_2", "reaction_2"),
+                    ]
+                ),
+            ) as send_progress, patch(
+                "agent_notifier.service.remove_message_reaction",
+                new=AsyncMock(),
+            ) as remove_reaction:
+                await service._notify_remote_progress(
+                    "019e81c0-c415", "阶段分析完成"
+                )
+                await service._notify_remote_progress(
+                    "019e81c0-c415", "测试执行完成"
+                )
 
             self.assertEqual(
                 "阶段分析完成",
-                service._send_to_mapping.await_args.args[1],
+                send_progress.await_args_list[0].kwargs["text"],
+            )
+            self.assertEqual(
+                "测试执行完成",
+                send_progress.await_args_list[1].kwargs["text"],
+            )
+            remove_reaction.assert_awaited_once_with(
+                project="le-wm-codex",
+                message_id="om_progress_1",
+                reaction_id="reaction_1",
             )
             service.registry.close()
+
+    async def test_remote_completion_removes_latest_progress_onit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            service = SharedService(paths)
+            service._remote_progress_onit["thread-1"] = (
+                "le-wm-codex",
+                "om_progress",
+                "reaction_latest",
+            )
+
+            with patch(
+                "agent_notifier.service.remove_message_reaction",
+                new=AsyncMock(),
+            ) as remove_reaction:
+                await service._finish_remote_progress("thread-1", "完成")
+
+            remove_reaction.assert_awaited_once_with(
+                project="le-wm-codex",
+                message_id="om_progress",
+                reaction_id="reaction_latest",
+            )
+            self.assertNotIn("thread-1", service._remote_progress_onit)
 
     async def test_token_usage_is_recorded_for_command_queries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,6 +182,31 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
                     "total"
                 ]["totalTokens"],
             )
+            service.registry.close()
+
+    async def test_unexpected_app_server_exit_notifies_active_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            service = SharedService(paths)
+            service.registry = SessionRegistry(paths.state_db)
+            service.registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:chat:user",
+                "thread-1",
+                "/workspace/le-wm",
+            )
+            service._send_to_mapping = AsyncMock()
+
+            await service._notify_interrupted_turns(
+                [("thread-1", "cc_connect")], returncode=17
+            )
+
+            message = service._send_to_mapping.await_args.args[1]
+            self.assertIn("Codex 回合异常中断", message)
+            self.assertIn("会话：le-wm | thread-1", message)
+            self.assertIn("App Server 退出码：17", message)
             service.registry.close()
 
 

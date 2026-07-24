@@ -57,6 +57,7 @@ else
   "$VENV/bin/python" -m pip install "$ROOT"
 fi
 ln -sfn "$VENV/bin/agent-notifier" "$BIN"
+"$BIN" init-config
 
 if [[ "$NO_SERVICE" == false ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   mkdir -p "$UNIT_HOME"

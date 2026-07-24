@@ -99,6 +99,47 @@ class ACPHandler:
                             },
                         },
                     )
+                elif event.get("kind") == "status" and event.get("text"):
+                    await self.emit(
+                        "session/update",
+                        {
+                            "sessionId": cc_session_id,
+                            "update": {
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {
+                                    "type": "text",
+                                    "text": event["text"],
+                                },
+                            },
+                        },
+                    )
+                elif event.get("kind") == "tool_start":
+                    await self.emit(
+                        "session/update",
+                        {
+                            "sessionId": cc_session_id,
+                            "update": {
+                                "sessionUpdate": "tool_call",
+                                "toolCallId": event["tool_call_id"],
+                                "title": event["title"],
+                                "kind": event.get("tool_kind", "other"),
+                                "status": "in_progress",
+                                "rawInput": event.get("raw_input", {}),
+                            },
+                        },
+                    )
+                elif event.get("kind") == "tool_complete":
+                    await self.emit(
+                        "session/update",
+                        {
+                            "sessionId": cc_session_id,
+                            "update": {
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": event["tool_call_id"],
+                                "status": event.get("status", "completed"),
+                            },
+                        },
+                    )
 
             return await self.backend.prompt(
                 target_thread_id, text, "cc_connect", emit_backend
