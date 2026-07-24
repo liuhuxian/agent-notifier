@@ -841,6 +841,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notify.add_argument("--route", default="default")
     notify.add_argument(
+        "-m", "--message",
+        help="notification body as a command-line argument",
+    )
+    notify.add_argument(
         "--stdin",
         action="store_true",
         help="read the notification body from stdin",
@@ -1007,11 +1011,15 @@ def main() -> None:
         elif args.command == "agent-help":
             print(format_agent_help())
         elif args.command == "notify":
-            if not args.stdin:
-                raise ValueError("notify currently requires --stdin")
+            if args.message is not None:
+                text = args.message
+            elif args.stdin:
+                text = sys.stdin.read()
+            else:
+                raise ValueError("notify requires -m <message> or --stdin")
             message_id = asyncio.run(
                 send_configured_notification(
-                    paths, args.route, sys.stdin.read()
+                    paths, args.route, text
                 )
             )
             print(f"sent: {message_id}")

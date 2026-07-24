@@ -67,9 +67,8 @@ function chunkText(text, maxLen) {
 
 async function sendMessage(fn$, message) {
   try {
-    await fn$`${process.env.HOME || "~"}/.local/bin/agent-notifier notify --stdin <<'ENDOFNOTIFY'
-${message}
-ENDOFNOTIFY`.quiet()
+    const home = process.env.HOME || "~"
+    await fn$`${home}/.local/bin/agent-notifier notify -m ${message}`.quiet()
   } catch {
     // agent-notifier not available, silently skip
   }

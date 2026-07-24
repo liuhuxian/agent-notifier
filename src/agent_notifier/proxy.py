@@ -384,9 +384,11 @@ class AppServerProxy:
                                 ),
                             )
                             if self.on_approval_request:
+                                thread_id = (payload.get("params") or {}).get("threadId")
+                                origin = self._thread_origins.get(thread_id, client_kind)
                                 try:
                                     await self.on_approval_request(
-                                        token, payload, client_kind
+                                        token, payload, origin
                                     )
                                 except Exception:
                                     logger.exception(
