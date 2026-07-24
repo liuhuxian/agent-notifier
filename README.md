@@ -123,16 +123,27 @@ systemd 默认 `PATH` 中的安装方式。Codex 路径变更后重新运行 `./
 
 ### 避免旧 Codex hook 重复通知
 
-如果 `~/.codex/hooks.json` 已配置 `Stop` 或 `PermissionRequest`（例如旧的飞书
-通知脚本），运行：
+安装器会自动配置原生 Codex 的 `Stop` hook。它只负责完成通知，不安装、删除或
+修改 `PermissionRequest` hook：
 
-```bash
-agent-notifier configure-hooks
+```text
+原生 Codex Stop
+    -> agent-notifier native-hook stop
+    -> agent-notifier notify --route default
+    -> 配置的通知群（默认 Group B）
 ```
 
-该命令先备份原文件，再给这两类 hook 增加可回滚的 gate。普通 `codex` 仍执行
-原 hook；只有 Agent Notifier 管理的 App Server 会跳过它们，避免完成通知和权限
-审批重复触发。其他 hook 类型不会修改。
+安装时会先备份已有 `~/.codex/hooks.json`。如果需要手动重新配置完成 hook，运行：
+
+```bash
+agent-notifier configure-native-hooks
+```
+
+该命令只替换 Agent Notifier 之前生成的旧完成 hook，保留其他用户自定义 hook。
+普通 `codex` 执行 Stop hook；Agent Notifier 管理的 App Server 会通过
+`AGENT_NOTIFIER_MANAGED=1` 跳过 hook，由服务本身发送完成通知，避免重复。
+
+旧的 `configure-hooks` 命令现在也只处理 `Stop`，不会触碰 `PermissionRequest`。
 
 ## 配置 cc-connect
 

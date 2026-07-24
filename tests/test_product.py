@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 from agent_notifier.cc_config import configure_project
 from agent_notifier.config import Paths, ProgressConfig
-from agent_notifier.hook_config import decode_command, gate_hooks
+from agent_notifier.hook_config import (
+    decode_command,
+    gate_hooks,
+    native_stop_hook,
+)
+from agent_notifier.native_hooks import build_completion_message, format_result
 from agent_notifier.service import format_approval_message
 from agent_notifier.versioning import parse_codex_version, parse_cc_connect_version
 
@@ -196,7 +201,33 @@ class ApprovalMessageTest(unittest.TestCase):
         self.assertIn("/codex-deny 1234567890", message)
 
 class HookConfigTest(unittest.TestCase):
-    def test_only_completion_and_permission_hooks_are_gated(self):
+    def test_native_stop_hook_does_not_touch_permission_request(self):
+        source = '{"hooks": {"PermissionRequest": [{"hooks": []}]}}'
+        updated, changed = native_stop_hook(source, "/opt/agent-notifier")
+        self.assertTrue(changed)
+        self.assertIn("PermissionRequest", updated)
+        self.assertIn("native-hook stop", decode_command(
+            updated.split("hook-gate --encoded ", 1)[1].split('"', 1)[0]
+        ))
+
+    def test_native_stop_hook_is_idempotent(self):
+        source, _ = native_stop_hook('{"hooks": {}}', "agent-notifier")
+        updated, changed = native_stop_hook(source, "agent-notifier")
+        self.assertFalse(changed)
+        self.assertEqual(source, updated)
+
+    def test_native_completion_keeps_result_layout(self):
+        message, _ = build_completion_message({
+            "hook_event_name": "Stop",
+            "session_id": "019e81c0-c415",
+            "cwd": "/workspace/le-wm",
+            "last-assistant-message": "one\n\n- two\n```bash\nrm -f /tmp/x\n```",
+        })
+        self.assertIn("结果：\n\none\n\n- two\nrm -f /tmp/x", message)
+        self.assertNotIn("```", message)
+        self.assertEqual("a\n\nb", format_result("a\n\nb"))
+
+    def test_only_completion_hooks_are_gated(self):
         source = '''{
           "hooks": {
             "Stop": [{"hooks": [{"command": "python3 notify.py"}]}],
@@ -205,9 +236,10 @@ class HookConfigTest(unittest.TestCase):
           }
         }'''
         updated, count = gate_hooks(source, "/opt/agent-notifier")
-        self.assertEqual(2, count)
+        self.assertEqual(1, count)
         self.assertIn("hook-gate --encoded", updated)
         self.assertIn("python3 context.py", updated)
+        self.assertIn("python3 approve.py", updated)
         encoded = updated.split("hook-gate --encoded ", 1)[1].split('"', 1)[0]
         self.assertEqual("python3 notify.py", decode_command(encoded))
 

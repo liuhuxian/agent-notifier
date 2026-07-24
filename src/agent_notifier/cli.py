@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import shutil
 import socket
@@ -25,7 +26,13 @@ from .codex.client import CodexAppServerClient
 from .codex.sessions import discover_rollout_thread_ids
 from .config import NotifierConfig, Paths, initialize_user_config
 from .feishu import reply_approval_result_card, send_text_message
-from .hook_config import decode_command, default_hooks_path, gate_hooks
+from .hook_config import (
+    decode_command,
+    default_hooks_path,
+    gate_hooks,
+    native_stop_hook as build_native_stop_hook_config,
+)
+from .native_hooks import build_completion_message, claim
 from .registry import SessionRegistry
 from .service import SharedService
 from .versioning import (
@@ -64,6 +71,21 @@ async def send_configured_notification(
         receive_id_type=route.receive_id_type,
         text=text,
     )
+
+
+def native_stop_hook(paths: Paths, payload_text: str) -> int:
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return 0
+    result = build_completion_message(payload)
+    if result is None:
+        return 0
+    message, dedupe_key = result
+    if not claim(paths.state_dir / "native_hook_seen", dedupe_key):
+        return 0
+    asyncio.run(send_configured_notification(paths, "default", message))
+    return 0
 
 
 def bind_terminal_thread(
@@ -700,6 +722,27 @@ def configure_hooks(paths: Paths, hooks_path: Path) -> Path | None:
     return backup
 
 
+def configure_native_hooks(paths: Paths, hooks_path: Path) -> Path | None:
+    paths.ensure_directories()
+    executable = shutil.which("agent-notifier") or str(Path(sys.argv[0]).resolve())
+    source = hooks_path.read_text() if hooks_path.exists() else '{"hooks": {}}\n'
+    updated, changed = build_native_stop_hook_config(source, executable)
+    if not changed:
+        return None
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    backup = hooks_path.with_name(
+        f"{hooks_path.name}.agent-notifier.{timestamp}.bak"
+    )
+    if hooks_path.exists():
+        shutil.copy2(hooks_path, backup)
+    temporary = hooks_path.with_suffix(hooks_path.suffix + ".agent-notifier.tmp")
+    temporary.write_text(updated)
+    os.replace(temporary, hooks_path)
+    (paths.config_dir / "last_codex_hooks_backup").write_text(str(backup))
+    return backup
+
+
 def restore_hooks(paths: Paths, hooks_path: Path) -> Path:
     marker = paths.config_dir / "last_codex_hooks_backup"
     if not marker.exists():
@@ -797,6 +840,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read the notification body from stdin",
     )
+    native_hook = sub.add_parser(
+        "native-hook", help="handle a native Codex lifecycle hook"
+    )
+    native_hook.add_argument("hook_name", choices=("stop",))
     decide = sub.add_parser(
         "decide", help="resolve a pending Codex approval request"
     )
@@ -822,6 +869,11 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--config", type=Path, default=Path.home() / ".cc-connect/config.toml")
     hooks = sub.add_parser("configure-hooks", help="gate duplicate Codex notification hooks")
     hooks.add_argument("--hooks", type=Path, default=default_hooks_path())
+    native_hooks = sub.add_parser(
+        "configure-native-hooks",
+        help="install the native Codex Stop notification hook",
+    )
+    native_hooks.add_argument("--hooks", type=Path, default=default_hooks_path())
     restore_hooks_parser = sub.add_parser(
         "restore-hooks", help="restore the last Codex hooks backup"
     )
@@ -958,6 +1010,9 @@ def main() -> None:
                 )
             )
             print(f"sent: {message_id}")
+        elif args.command == "native-hook":
+            if args.hook_name == "stop":
+                native_stop_hook(paths, sys.stdin.read())
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(
@@ -1012,6 +1067,13 @@ def main() -> None:
                 print(f"backup: {backup}")
             else:
                 print("no ungated Stop/PermissionRequest hooks found")
+        elif args.command == "configure-native-hooks":
+            backup = configure_native_hooks(paths, args.hooks)
+            if backup:
+                print(f"configured native Stop hook: {args.hooks}")
+                print(f"backup: {backup}")
+            else:
+                print(f"native Stop hook already configured: {args.hooks}")
         elif args.command == "restore-hooks":
             backup = restore_hooks(paths, args.hooks)
             print(f"restored from: {backup}")
