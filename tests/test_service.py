@@ -24,6 +24,16 @@ def make_paths(root: Path) -> Paths:
 
 
 class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _write_notification_route(paths: Paths) -> None:
+        paths.ensure_directories()
+        paths.config_file.write_text(
+            "[notification_routes.default]\n"
+            'project = "le-wm-codex"\n'
+            'receive_id_type = "chat_id"\n'
+            'receive_id = "oc_notify"\n'
+        )
+
     async def test_sent_approval_card_message_id_is_persisted(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
@@ -51,7 +61,9 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
                 "agent_notifier.service.send_approval_card",
                 new=AsyncMock(return_value="om_original"),
             ) as send_card:
-                await service._notify_approval_request(token, request)
+                await service._notify_approval_request(
+                    token, request, "cc_connect"
+                )
 
             record = service.approval_store.find_by_prefix("1234567890")
             self.assertEqual("om_original", record.feishu_message_id)
@@ -63,10 +75,63 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
             service.registry.close()
             service.approval_store.close()
 
+    async def test_terminal_approval_is_sent_to_notification_chat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            self._write_notification_route(paths)
+            service = SharedService(paths)
+            service.registry = SessionRegistry(paths.state_db)
+            service.approval_store = ApprovalStore(paths.state_db)
+            service.registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:oc_notify:ou_user",
+                "notify-thread",
+                "/workspace",
+            )
+            service.registry.subscribe(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:oc_interactive:ou_user",
+                "thread-1",
+                "/workspace",
+            )
+            token = "agent-notifier-approval:1234567890abcdef"
+            request = {
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thread-1",
+                    "reason": "test",
+                    "command": "date",
+                },
+            }
+            service.approval_store.register(
+                token, "thread-1", request["method"], request
+            )
+
+            with patch(
+                "agent_notifier.service.send_approval_card",
+                new=AsyncMock(return_value="om_notify"),
+            ) as send_card:
+                await service._notify_approval_request(
+                    token, request, "terminal"
+                )
+
+            self.assertEqual("oc_notify", send_card.await_args.kwargs["receive_id"])
+            self.assertEqual(
+                "chat_id", send_card.await_args.kwargs["receive_id_type"]
+            )
+            self.assertEqual(
+                "feishu:oc_interactive:ou_user",
+                send_card.await_args.kwargs["session_key"],
+            )
+            service.registry.close()
+            service.approval_store.close()
+
     async def test_completion_notification_includes_session_directory_and_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))
-            paths.ensure_directories()
+            self._write_notification_route(paths)
             service = SharedService(paths)
             service.registry = SessionRegistry(paths.state_db)
             service.registry.bind(
@@ -76,17 +141,25 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
                 "019e81c0-c415",
                 "/users/huxian/project/le-wm",
             )
-            service._send_to_mapping = AsyncMock()
+            with patch(
+                "agent_notifier.service.send_text_message",
+                new=AsyncMock(return_value="om_notify"),
+            ) as send_message:
+                await service._notify_terminal_completion(
+                    "019e81c0-c415", "任务执行完成"
+                )
 
-            await service._notify_terminal_completion(
-                "019e81c0-c415", "任务执行完成"
-            )
-
-            message = service._send_to_mapping.await_args.args[1]
+            message = send_message.await_args.kwargs["text"]
             self.assertIn("Codex 回合已完成", message)
             self.assertIn("会话：le-wm | 019e81c0", message)
             self.assertIn("目录：/users/huxian/project/le-wm", message)
             self.assertIn("结果：\n任务执行完成", message)
+            self.assertEqual(
+                "oc_notify", send_message.await_args.kwargs["receive_id"]
+            )
+            self.assertEqual(
+                "chat_id", send_message.await_args.kwargs["receive_id_type"]
+            )
             service.registry.close()
 
     async def test_remote_progress_sends_complete_commentary_text(self):

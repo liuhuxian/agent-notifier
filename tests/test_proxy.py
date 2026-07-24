@@ -449,8 +449,8 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_cc_connect_approval_is_hidden_from_source_but_reaches_terminal(self):
         notifications = []
 
-        async def notify(token, payload):
-            notifications.append((token, payload))
+        async def notify(token, payload, origin):
+            notifications.append((token, payload, origin))
 
         self.proxy.on_approval_request = notify
         remote = await self.session.ws_connect(
@@ -503,6 +503,7 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(remote.receive_json(), timeout=0.1)
             self.assertEqual(1, len(notifications))
             self.assertEqual(approval["id"], notifications[0][0])
+            self.assertEqual("cc_connect", notifications[0][2])
         finally:
             await terminal.close()
             await remote.close()

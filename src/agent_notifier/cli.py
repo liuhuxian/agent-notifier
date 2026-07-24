@@ -24,7 +24,7 @@ from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
 from .codex.sessions import discover_rollout_thread_ids
 from .config import NotifierConfig, Paths, initialize_user_config
-from .feishu import reply_approval_result_card
+from .feishu import reply_approval_result_card, send_text_message
 from .hook_config import decode_command, default_hooks_path, gate_hooks
 from .registry import SessionRegistry
 from .service import SharedService
@@ -47,14 +47,50 @@ def _resume_thread_id(codex_args: list[str]) -> str | None:
     return candidate if candidate and not candidate.startswith("-") else None
 
 
+async def send_configured_notification(
+    paths: Paths, route_name: str, text: str
+) -> str:
+    config = NotifierConfig.load(paths.config_file)
+    route = config.notification_routes.get(route_name)
+    if route is None:
+        raise ValueError(
+            f"notification route {route_name!r} is not configured"
+        )
+    if not text.strip():
+        raise ValueError("notification text is empty")
+    return await send_text_message(
+        project=route.project,
+        receive_id=route.receive_id,
+        receive_id_type=route.receive_id_type,
+        text=text,
+    )
+
+
 def bind_terminal_thread(
     paths: Paths,
     thread_id: str,
     project: str | None = None,
     cwd: str | None = None,
+    notification_route: str = "default",
 ):
     registry = SessionRegistry(paths.state_db)
     try:
+        config = NotifierConfig.load(paths.config_file)
+        configured = config.notification_routes.get(notification_route)
+        if configured and (project is None or project == configured.project):
+            # A notification route is intentionally allowed to have no
+            # interactive cc-connect session. Use a stable chat-scoped key
+            # so terminal-origin turns can still be indexed by thread.
+            external_key = (
+                f"feishu:{configured.receive_id}:terminal:{thread_id}"
+            )
+            return registry.subscribe(
+                "cc_connect",
+                configured.project,
+                external_key,
+                thread_id,
+                cwd or os.getcwd(),
+            )
         routes = registry.list_routes("cc_connect", project)
         scope = f"project {project!r}" if project else "all configured projects"
         if not routes:
@@ -703,6 +739,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--notify-project",
         help="Feishu project to bind when resuming a Codex thread",
     )
+    codex.add_argument(
+        "--notify-route",
+        default="default",
+        help="configured outbound notification route (default: default)",
+    )
     codex.add_argument("codex_args", nargs=argparse.REMAINDER)
     bind = sub.add_parser(
         "bind", help="bind an existing Codex thread to a Feishu project"
@@ -747,6 +788,15 @@ def build_parser() -> argparse.ArgumentParser:
     agent_cmd.add_argument("--project")
     agent_cmd.add_argument("--external-key")
     sub.add_parser("agent-help", help="show Agent Notifier chat commands")
+    notify = sub.add_parser(
+        "notify", help="send a message to a configured notification route"
+    )
+    notify.add_argument("--route", default="default")
+    notify.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read the notification body from stdin",
+    )
     decide = sub.add_parser(
         "decide", help="resolve a pending Codex approval request"
     )
@@ -811,6 +861,7 @@ def main() -> None:
                     thread_id,
                     project=args.notify_project,
                     cwd=os.getcwd(),
+                    notification_route=args.notify_route,
                 )
                 print(
                     f"Feishu notifications: {mapping.project} "
@@ -898,6 +949,15 @@ def main() -> None:
             )
         elif args.command == "agent-help":
             print(format_agent_help())
+        elif args.command == "notify":
+            if not args.stdin:
+                raise ValueError("notify currently requires --stdin")
+            message_id = asyncio.run(
+                send_configured_notification(
+                    paths, args.route, sys.stdin.read()
+                )
+            )
+            print(f"sent: {message_id}")
         elif args.command == "decide":
             ensure_service(paths)
             status = asyncio.run(

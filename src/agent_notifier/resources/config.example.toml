@@ -17,3 +17,11 @@ moving_onit = true
 
 # Report an active turn that ends because the App Server stops unexpectedly.
 notify_interruption = true
+
+# Optional explicit outbound notification targets. Interactive chats remain
+# under [chat_routes]; this route is for terminal and pipeline notifications.
+#
+# [notification_routes.default]
+# project = "le-wm-codex"
+# receive_id_type = "chat_id"
+# receive_id = "oc_your_notification_group_chat_id"

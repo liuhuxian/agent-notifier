@@ -250,6 +250,15 @@ class SessionRegistry:
             ).fetchone()
         return SessionMapping(*row) if row else None
 
+    def find_by_chat_id(
+        self, project: str, chat_id: str
+    ) -> SessionMapping | None:
+        for mapping in self.list_routes("cc_connect", project):
+            parts = mapping.external_key.split(":", 2)
+            if len(parts) >= 2 and parts[1] == chat_id:
+                return mapping
+        return None
+
     def list_subscriptions(
         self,
         adapter: str,

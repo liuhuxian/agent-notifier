@@ -237,7 +237,9 @@ class AppServerProxy:
         on_remote_completion: Callable[[str, str], Awaitable[None]] | None = None,
         on_remote_progress: Callable[[str, str], Awaitable[None]] | None = None,
         approval_store: ApprovalStore | None = None,
-        on_approval_request: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_approval_request: (
+            Callable[[str, dict, str], Awaitable[None]] | None
+        ) = None,
         on_token_usage: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
         self.listen_socket = Path(listen_socket)
@@ -383,7 +385,9 @@ class AppServerProxy:
                             )
                             if self.on_approval_request:
                                 try:
-                                    await self.on_approval_request(token, payload)
+                                    await self.on_approval_request(
+                                        token, payload, client_kind
+                                    )
                                 except Exception:
                                     logger.exception(
                                         "failed to send remote approval notification: "

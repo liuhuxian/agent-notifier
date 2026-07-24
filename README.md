@@ -155,6 +155,27 @@ notify_interruption = true
   退出时移除。
 - `notify_interruption`：App Server 异常退出时发送中断通知。
 
+终端回合、终端审批和外部 pipeline 使用独立通知群：
+
+```toml
+[notification_routes.default]
+project = "le-wm-codex"
+receive_id_type = "chat_id"
+receive_id = "oc_your_notification_group_chat_id"
+```
+
+该群可同时在 `[chat_routes]` 中配置为 `silent`，从而只接收通知、不启动
+Codex/OpenCode 对话。分流规则为：
+
+- 终端发起的 Codex turn：完成、异常和审批发送到 `default` 通知群。
+- 飞书 P2P 或交互群发起的 turn：回复、进度和审批留在原聊天。
+- 外部工具使用下列命令显式发送到通知群：
+
+```bash
+printf '%s\n' 'pipeline completed' |
+  agent-notifier notify --route default --stdin
+```
+
 修改配置后重新运行 `configure-cc`，再重启 cc-connect，使飞书显示设置生效：
 
 ```bash

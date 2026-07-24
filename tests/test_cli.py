@@ -20,6 +20,7 @@ from agent_notifier.cli import (
     format_agent_switch,
     list_agent_sessions,
     reply_approval_decision,
+    send_configured_notification,
     switch_agent_session,
 )
 from agent_notifier.config import Paths
@@ -86,6 +87,41 @@ class CodexBindingTest(unittest.TestCase):
         self.assertEqual("019e81c0", switched.session_id)
         self.assertEqual("status", queried.agent_command)
         self.assertEqual("agent-help", help_command.command)
+
+    def test_notify_parser_accepts_named_route_and_stdin(self):
+        args = build_parser().parse_args(
+            ["notify", "--route", "default", "--stdin"]
+        )
+        self.assertEqual("default", args.route)
+        self.assertTrue(args.stdin)
+
+    def test_configured_notification_uses_named_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            paths.config_file.write_text(
+                "[notification_routes.default]\n"
+                'project = "le-wm-codex"\n'
+                'receive_id_type = "chat_id"\n'
+                'receive_id = "oc_notify"\n'
+            )
+            with patch(
+                "agent_notifier.cli.send_text_message",
+                new=AsyncMock(return_value="om_notify"),
+            ) as send_message:
+                message_id = asyncio.run(
+                    send_configured_notification(
+                        paths, "default", "pipeline done"
+                    )
+                )
+
+        self.assertEqual("om_notify", message_id)
+        send_message.assert_awaited_once_with(
+            project="le-wm-codex",
+            receive_id="oc_notify",
+            receive_id_type="chat_id",
+            text="pipeline done",
+        )
 
     def test_agent_help_lists_registered_user_commands(self):
         result = format_agent_help()
@@ -473,6 +509,70 @@ class CodexBindingTest(unittest.TestCase):
                 registry.find_by_thread("thread-new").external_key,
             )
             registry.close()
+
+    def test_terminal_resume_prefers_default_notification_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            paths.config_file.write_text(
+                "[notification_routes.default]\n"
+                'project = "le-wm-codex"\n'
+                'receive_id_type = "chat_id"\n'
+                'receive_id = "oc_notify"\n'
+            )
+            registry = SessionRegistry(paths.state_db)
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:oc_interactive:ou_user",
+                "thread-interactive",
+                "/interactive",
+            )
+            registry.bind(
+                "cc_connect",
+                "le-wm-codex",
+                "feishu:oc_notify:ou_user",
+                "thread-notify",
+                "/notify",
+            )
+            registry.close()
+
+            mapping = bind_terminal_thread(
+                paths,
+                "thread-terminal",
+                project="le-wm-codex",
+                cwd="/terminal",
+            )
+
+        self.assertEqual(
+            "feishu:oc_notify:terminal:thread-terminal",
+            mapping.external_key,
+        )
+        self.assertEqual("thread-terminal", mapping.thread_id)
+
+    def test_terminal_resume_uses_unregistered_notification_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            paths.config_file.write_text(
+                "[notification_routes.default]\n"
+                'project = "le-wm-codex"\n'
+                'receive_id_type = "chat_id"\n'
+                'receive_id = "oc_notify"\n'
+            )
+
+            mapping = bind_terminal_thread(
+                paths,
+                "thread-terminal",
+                project="le-wm-codex",
+                cwd="/terminal",
+            )
+
+        self.assertEqual(
+            "feishu:oc_notify:terminal:thread-terminal",
+            mapping.external_key,
+        )
+        self.assertEqual("thread-terminal", mapping.thread_id)
 
     def test_ambiguous_routes_require_project(self):
         with tempfile.TemporaryDirectory() as tmp:

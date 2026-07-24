@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -43,19 +43,68 @@ class ProgressConfig:
 
 
 @dataclass(frozen=True)
+class NotificationRoute:
+    project: str
+    receive_id: str
+    receive_id_type: str = "chat_id"
+
+    @classmethod
+    def from_mapping(
+        cls, name: str, values: dict[str, Any]
+    ) -> "NotificationRoute":
+        project = str(values.get("project", "")).strip()
+        receive_id = str(values.get("receive_id", "")).strip()
+        receive_id_type = str(
+            values.get("receive_id_type", "chat_id")
+        ).strip()
+        if not project:
+            raise ValueError(
+                f"notification route {name!r} requires project"
+            )
+        if not receive_id:
+            raise ValueError(
+                f"notification route {name!r} requires receive_id"
+            )
+        if receive_id_type not in {"chat_id", "open_id"}:
+            raise ValueError(
+                f"notification route {name!r} has unsupported "
+                f"receive_id_type: {receive_id_type}"
+            )
+        return cls(project, receive_id, receive_id_type)
+
+
+@dataclass(frozen=True)
 class NotifierConfig:
     progress: ProgressConfig = ProgressConfig()
+    notification_routes: dict[str, NotificationRoute] = field(
+        default_factory=dict
+    )
 
     @classmethod
     def load(cls, path: Path) -> "NotifierConfig":
         if not path.exists():
-            return cls()
+            return cls(notification_routes={})
         with path.open("rb") as stream:
             values = tomllib.load(stream)
         progress = values.get("progress") or {}
         if not isinstance(progress, dict):
             raise ValueError("[progress] must be a TOML table")
-        return cls(progress=ProgressConfig.from_mapping(progress))
+        raw_routes = values.get("notification_routes") or {}
+        if not isinstance(raw_routes, dict):
+            raise ValueError("[notification_routes] must be a TOML table")
+        routes = {}
+        for name, route_values in raw_routes.items():
+            if not isinstance(route_values, dict):
+                raise ValueError(
+                    f"[notification_routes.{name}] must be a TOML table"
+                )
+            routes[str(name)] = NotificationRoute.from_mapping(
+                str(name), route_values
+            )
+        return cls(
+            progress=ProgressConfig.from_mapping(progress),
+            notification_routes=routes,
+        )
 
 
 @dataclass(frozen=True)

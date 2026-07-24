@@ -51,6 +51,34 @@ class NotifierConfigTest(unittest.TestCase):
         self.assertEqual(3500, config.progress.stream_update_interval_ms)
         self.assertFalse(config.progress.moving_onit)
 
+    def test_notification_route_is_loaded_explicitly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                "[notification_routes.default]\n"
+                'project = "le-wm-codex"\n'
+                'receive_id_type = "chat_id"\n'
+                'receive_id = "oc_notify"\n'
+            )
+            config = NotifierConfig.load(path)
+
+        route = config.notification_routes["default"]
+        self.assertEqual("le-wm-codex", route.project)
+        self.assertEqual("chat_id", route.receive_id_type)
+        self.assertEqual("oc_notify", route.receive_id)
+
+    def test_notification_route_rejects_unsupported_receive_id_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                "[notification_routes.default]\n"
+                'project = "le-wm-codex"\n'
+                'receive_id_type = "email"\n'
+                'receive_id = "nobody@example.com"\n'
+            )
+            with self.assertRaisesRegex(ValueError, "receive_id_type"):
+                NotifierConfig.load(path)
+
     def test_initialize_config_is_idempotent_and_preserves_user_edits(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))

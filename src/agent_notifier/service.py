@@ -17,6 +17,7 @@ from .feishu import (
     remove_message_reaction,
     send_approval_card,
     send_progress_message_with_onit,
+    send_text_message,
 )
 from .proxy import AppServerProxy, approval_short_id
 from .registry import SessionRegistry
@@ -182,14 +183,14 @@ class SharedService:
             f"目录：{mapping.cwd}\n"
             f"结果：\n{result}"
         )
-        await self._send_to_mapping(mapping, message)
+        await self._send_to_notification_route("default", message)
 
     async def _notify_interrupted_turns(
         self,
         active_turns: list[tuple[str, str]],
         returncode: int | None,
     ) -> None:
-        for thread_id, _origin in active_turns:
+        for thread_id, origin in active_turns:
             await self._clear_remote_progress(thread_id)
             mapping = (
                 self.registry.find_by_thread(thread_id)
@@ -209,7 +210,10 @@ class SharedService:
                 f"App Server 退出码：{returncode}\n"
                 "Agent Notifier 将自动重启服务；请确认任务状态后重试。"
             )
-            await self._send_to_mapping(mapping, message)
+            if origin == "terminal":
+                await self._send_to_notification_route("default", message)
+            else:
+                await self._send_to_mapping(mapping, message)
 
     async def _record_token_usage(
         self, thread_id: str, token_usage: dict
@@ -296,7 +300,9 @@ class SharedService:
             reaction_id=reaction_id,
         )
 
-    async def _notify_approval_request(self, token: str, request: dict) -> None:
+    async def _notify_approval_request(
+        self, token: str, request: dict, origin: str
+    ) -> None:
         params = request.get("params") or {}
         thread_id = params.get("threadId")
         mapping = (
@@ -313,12 +319,21 @@ class SharedService:
             return
         request_id = approval_short_id(token)
         reason, operation = approval_details(request)
+        target_mapping = mapping
+        receive_id_type = "open_id"
         receive_id = mapping.external_key.rsplit(":", 1)[-1]
+        target_project = mapping.project
+        if origin == "terminal":
+            route = self._notification_route("default")
+            target_project = route.project
+            receive_id = route.receive_id
+            receive_id_type = route.receive_id_type
         try:
             message_id = await send_approval_card(
-                project=mapping.project,
+                project=target_project,
                 receive_id=receive_id,
-                session_key=mapping.external_key,
+                receive_id_type=receive_id_type,
+                session_key=target_mapping.external_key,
                 approval_id=request_id,
                 reason=reason,
                 operation=operation,
@@ -333,9 +348,33 @@ class SharedService:
                 "Feishu approval card failed; falling back to text: approval=%s",
                 request_id,
             )
-            await self._send_to_mapping(
-                mapping, format_approval_message(token, request)
+            if origin == "terminal":
+                await self._send_to_notification_route(
+                    "default", format_approval_message(token, request)
+                )
+            else:
+                await self._send_to_mapping(
+                    target_mapping, format_approval_message(token, request)
+                )
+
+    def _notification_route(self, name: str):
+        route = self.config.notification_routes.get(name)
+        if route is None:
+            raise RuntimeError(
+                f"notification route {name!r} is not configured"
             )
+        return route
+
+    async def _send_to_notification_route(
+        self, name: str, message: str
+    ) -> None:
+        route = self._notification_route(name)
+        await send_text_message(
+            project=route.project,
+            receive_id=route.receive_id,
+            receive_id_type=route.receive_id_type,
+            text=message,
+        )
 
     async def _send_to_mapping(self, mapping, message: str) -> None:
         direct = Path.home() / ".npm-global/lib/node_modules/cc-connect/bin/cc-connect"

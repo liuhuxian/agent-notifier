@@ -1,11 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from agent_notifier.feishu import (
     build_approval_card,
     build_approval_result_card,
     load_feishu_settings,
+    send_text_message,
 )
 
 
@@ -82,6 +84,51 @@ app_secret = "secret"
         self.assertIn(
             "目录：`/users/huxian/project/le-wm`",
             allowed["elements"][0]["content"],
+        )
+
+
+class FeishuMessageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_text_message_uses_configured_receive_id_type(self):
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch(
+            "agent_notifier.feishu.load_feishu_settings",
+            return_value={
+                "app_id": "app",
+                "app_secret": "secret",
+                "domain": "https://open.feishu.cn",
+            },
+        ), patch(
+            "agent_notifier.feishu.ClientSession",
+            return_value=FakeSession(),
+        ), patch(
+            "agent_notifier.feishu._tenant_access_token",
+            new=AsyncMock(return_value="token"),
+        ), patch(
+            "agent_notifier.feishu._post_json",
+            new=AsyncMock(
+                return_value={"data": {"message_id": "om_notify"}}
+            ),
+        ) as post_json:
+            message_id = await send_text_message(
+                project="le-wm-codex",
+                receive_id="oc_notify",
+                receive_id_type="chat_id",
+                text="pipeline done",
+            )
+
+        self.assertEqual("om_notify", message_id)
+        self.assertIn(
+            "receive_id_type=chat_id",
+            post_json.await_args.args[1],
+        )
+        self.assertEqual(
+            "oc_notify", post_json.await_args.args[2]["receive_id"]
         )
 
 
