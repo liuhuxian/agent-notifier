@@ -541,6 +541,35 @@ async def run_acp(paths: Paths) -> None:
         await rpc.close()
 
 
+async def run_acp_opencode(paths: Paths, base_url: str) -> None:
+    from .opencode.backend import OpencodeBackend
+    from .opencode.client import OpencodeClient
+
+    client = OpencodeClient(base_url)
+    await client.connect()
+    await client.start_sse()
+    registry = SessionRegistry(paths.state_db)
+    config = NotifierConfig.load(paths.config_file)
+    server_ref: dict = {}
+
+    async def request_permission(params: dict) -> dict:
+        server = server_ref.get("server")
+        if server is None:
+            return {"outcome": {"outcome": "cancelled"}}
+        return await server.call_client("session/request_permission", params)
+
+    backend = OpencodeBackend(
+        client, registry, request_permission, config.progress
+    )
+    server = ACPStdioServer(backend, sys.stdin, sys.stdout)
+    server_ref["server"] = server
+    try:
+        await server.run()
+    finally:
+        await backend.close()
+        registry.close()
+
+
 def configure_cc(paths: Paths, project: str, config_path: Path) -> Path:
     paths.ensure_directories()
     source = config_path.read_text()
@@ -606,7 +635,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("AGENT_NOTIFIER_CODEX", "codex"),
         help="Codex CLI executable used for the managed App Server",
     )
-    sub.add_parser("acp", help="run the cc-connect ACP stdio adapter")
+    acp = sub.add_parser("acp", help="run the cc-connect ACP stdio adapter")
+    acp.add_argument(
+        "--backend",
+        choices=("codex", "opencode"),
+        default="codex",
+        help="agent backend implementation (default: codex)",
+    )
+    acp.add_argument(
+        "--opencode-url",
+        default=os.environ.get(
+            "AGENT_NOTIFIER_OPENCODE_URL", "http://127.0.0.1:4098"
+        ),
+        help="opencode serve HTTP base URL (for --backend opencode)",
+    )
     codex = sub.add_parser("codex", help="launch native Codex TUI through the service")
     codex.add_argument(
         "--notify-project",
@@ -699,7 +741,10 @@ def main() -> None:
             asyncio.run(SharedService(paths, codex_binary=args.codex).run())
         elif args.command == "acp":
             check_versions(require_cc=True)
-            asyncio.run(run_acp(paths))
+            if args.backend == "opencode":
+                asyncio.run(run_acp_opencode(paths, args.opencode_url))
+            else:
+                asyncio.run(run_acp(paths))
         elif args.command == "codex":
             check_versions(require_cc=False)
             ensure_service(paths)

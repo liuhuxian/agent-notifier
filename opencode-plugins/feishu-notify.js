@@ -1,3 +1,5 @@
+const IS_ACP_MODE = process.argv?.includes('acp') ?? false
+
 const MAX_CHUNK = 30000
 
 function buildPermissionMessage(props) {
@@ -114,6 +116,10 @@ export const FeishuNotify = async ({ $, client, directory }) => {
     event: async ({ event }) => {
       const type = event?.type
       if (!type) return
+
+      if (IS_ACP_MODE && (type === "session.idle" || type === "permission.asked")) {
+        return
+      }
 
       if (type === "session.idle") {
         await sendCompletionNotification($, client, event, directory)
