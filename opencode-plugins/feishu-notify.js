@@ -68,17 +68,13 @@ function chunkText(text, maxLen) {
   return chunks
 }
 
-const NOTIFY_SESSION = process.env?.LEWM_NOTIFY_SESSION || ""
-
 async function sendMessage(fn$, message) {
   try {
-    if (NOTIFY_SESSION) {
-      await fn$`cc-connect send -s ${NOTIFY_SESSION} -m ${message}`.quiet()
-    } else {
-      await fn$`cc-connect send -m ${message}`.quiet()
-    }
+    await fn$`${process.env.HOME || "~"}/.local/bin/agent-notifier notify --stdin <<'ENDOFNOTIFY'
+${message}
+ENDOFNOTIFY`.quiet()
   } catch {
-    // cc-connect not available, silently skip
+    // agent-notifier not available, silently skip
   }
 }
 
