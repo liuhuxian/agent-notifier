@@ -127,18 +127,30 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             self.backend.prompt(session_id, "test", "cc_connect", emit)
         )
         await asyncio.sleep(0.05)
+        # First, register a text part
         await self.client.events.put({
-            "type": "message.part.delta",
+            "type": "message.part.updated",
             "properties": {
                 "sessionID": session_id,
-                "part": {"type": "text", "text": "Hello "},
+                "part": {"id": "prt_1", "type": "text", "text": ""},
             },
         })
         await self.client.events.put({
             "type": "message.part.delta",
             "properties": {
                 "sessionID": session_id,
-                "part": {"type": "text", "text": "World"},
+                "partID": "prt_1",
+                "field": "text",
+                "delta": "Hello ",
+            },
+        })
+        await self.client.events.put({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": session_id,
+                "partID": "prt_1",
+                "field": "text",
+                "delta": "World",
             },
         })
         await self.client.events.put({
@@ -154,6 +166,41 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             {"kind": "text", "text": "World"},
             emit_calls,
         )
+
+    async def test_prompt_ignores_reasoning_delta(self):
+        session_id = "ses_test_reason"
+        emit_calls = []
+
+        async def emit(event):
+            emit_calls.append(event)
+
+        task = asyncio.create_task(
+            self.backend.prompt(session_id, "test", "cc_connect", emit)
+        )
+        await asyncio.sleep(0.05)
+        await self.client.events.put({
+            "type": "message.part.updated",
+            "properties": {
+                "sessionID": session_id,
+                "part": {"id": "prt_reason", "type": "reasoning", "text": ""},
+            },
+        })
+        await self.client.events.put({
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": session_id,
+                "partID": "prt_reason",
+                "field": "text",
+                "delta": "reasoning content",
+            },
+        })
+        await self.client.events.put({
+            "type": "session.idle",
+            "properties": {"sessionID": session_id},
+        })
+        await asyncio.wait_for(task, timeout=2)
+        text_emits = [e for e in emit_calls if e.get("kind") == "text"]
+        self.assertEqual(0, len(text_emits))
 
     async def test_prompt_handles_permission(self):
         session_id = "ses_test_perm"

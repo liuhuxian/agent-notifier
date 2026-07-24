@@ -108,7 +108,8 @@ class OpencodeBackend:
         self._ensure_dispatcher()
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers[session_id].append(queue)
-        final_text: str | None = None
+        accumulated_text: list[str] = []
+        part_types: dict[str, str] = {}
         try:
             await self._client.send_prompt(session_id, text)
             if self.progress.progress_card:
@@ -123,24 +124,28 @@ class OpencodeBackend:
                     )
                 props = event.get("properties") or {}
 
-                if event_type == "message.part.delta":
-                    part = props.get("part") or props.get("info") or {}
-                    if part.get("type") == "text" and not part.get("synthetic"):
-                        delta = part.get("text", "")
-                        if delta:
-                            if self.progress.stream_preview:
-                                await emit({"kind": "text", "text": delta})
+                if event_type == "message.part.updated":
+                    part = props.get("part") or {}
+                    if part.get("type") == "text":
+                        part_types[part["id"]] = "text"
+                        text_val = part.get("text", "")
+                        if text_val and not accumulated_text:
+                            accumulated_text.append(text_val.strip())
+                    elif part.get("type") == "reasoning":
+                        part_types[part.get("id", "")] = "reasoning"
 
-                elif event_type == "message.updated":
-                    info = props.get("info") or {}
-                    if info.get("role") == "assistant":
-                        parts = info.get("parts", [])
-                        chunks = []
-                        for p in parts:
-                            if p.get("type") == "text" and not p.get("synthetic"):
-                                chunks.append(p.get("text", ""))
-                        if chunks:
-                            final_text = "".join(chunks).strip()
+                elif event_type == "message.part.delta":
+                    part_id = props.get("partID", "")
+                    field = props.get("field", "")
+                    delta = props.get("delta", "")
+                    if (
+                        part_types.get(part_id) == "text"
+                        and field == "text"
+                        and delta
+                    ):
+                        accumulated_text.append(delta)
+                        if self.progress.stream_preview:
+                            await emit({"kind": "text", "text": delta})
 
                 elif event_type == "permission.asked":
                     perm_id = props.get("id")
@@ -148,28 +153,20 @@ class OpencodeBackend:
                         await self._forward_permission(props, session_id, emit)
 
                 elif event_type == "session.idle":
-                    if final_text:
+                    final_text = "".join(accumulated_text).strip()
+                    if final_text and not self.progress.stream_preview:
                         await emit({"kind": "text", "text": final_text})
                     return {"stopReason": "end_turn"}
 
                 elif event_type == "session.error":
-                    error = props.get("error") or props.get("message") or "unknown error"
+                    error = (
+                        props.get("error") or props.get("message") or "unknown error"
+                    )
                     raise RuntimeError(error)
-
-                elif event_type in ("session.status", "session.updated"):
-                    status = info.get("type") if "info" in props else props.get("type")
-                    if status == "idle" and not any(
-                        e.get("type") == "session.idle" for e in [event]
-                    ):
-                        pass
         finally:
             self._subscribers[session_id].remove(queue)
             if not self._subscribers[session_id]:
                 del self._subscribers[session_id]
-
-        if final_text:
-            return {"stopReason": "end_turn"}
-        return {"stopReason": "cancelled"}
 
     async def _forward_permission(
         self,
