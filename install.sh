@@ -24,6 +24,7 @@ uninstall() {
   fi
   rm -f "$UNIT_HOME/agent-notifier.service" "$BIN"
   rm -rf "$VENV"
+  rm -f "$CONFIG_HOME/opencode/plugins/feishu-notify.js"
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload >/dev/null 2>&1 || true
   fi
@@ -89,6 +90,17 @@ else
 fi
 
 echo "Installed: $BIN"
+
+OPENCODE_PLUGIN_DIR="$CONFIG_HOME/opencode/plugins"
+mkdir -p "$OPENCODE_PLUGIN_DIR"
+cp "$ROOT/opencode-plugins/feishu-notify.js" "$OPENCODE_PLUGIN_DIR/"
+if command -v opencode >/dev/null 2>&1; then
+  echo "OpenCode plugin installed: $OPENCODE_PLUGIN_DIR/feishu-notify.js"
+else
+  echo "OpenCode not found — plugin installed but requires OpenCode runtime"
+  echo "OpenCode plugin: $OPENCODE_PLUGIN_DIR/feishu-notify.js"
+fi
+
 "$BIN" doctor
 echo
 echo "If Codex already has Stop/PermissionRequest hooks: agent-notifier configure-hooks"
