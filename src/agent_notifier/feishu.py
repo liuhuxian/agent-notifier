@@ -321,6 +321,7 @@ async def send_markdown_message(
             "OpenCode 回合异常中断",
             "OpenCode 权限请求",
             "OpenCode 错误",
+            "Call-Agent 进度通知",
         ))
         title = candidate[:40] if has_title else "通知"
         body = (
