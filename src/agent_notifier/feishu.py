@@ -154,6 +154,25 @@ async def _post_json(
         return result
 
 
+async def _patch_json(
+    session: ClientSession,
+    url: str,
+    payload: dict[str, Any],
+    token: str | None = None,
+) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with session.patch(url, json=payload, headers=headers, timeout=10) as response:
+        result = await response.json()
+        if response.status >= 400 or result.get("code", 0) != 0:
+            raise RuntimeError(
+                f"Feishu API failed: http={response.status} "
+                f"code={result.get('code')} msg={result.get('msg')}"
+            )
+        return result
+
+
 async def _delete_json(
     session: ClientSession,
     url: str,
@@ -402,3 +421,121 @@ async def reply_approval_result_card(
             token,
         )
         return str(result.get("data", {}).get("message_id", ""))
+
+
+async def send_opencode_approval_card(
+    project: str,
+    receive_id: str,
+    receive_id_type: str,
+    session_id: str,
+    perm_id: str,
+    perm_type: str,
+    filepath: str,
+    pattern: str = "",
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> str:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        short_perm = perm_id[-8:] if perm_id else "unknown"
+        content_lines = [f"**类型**: {perm_type}"]
+        if pattern:
+            content_lines.append(f"**操作**: {pattern}")
+        if filepath:
+            content_lines.append(f"**路径**: {filepath}")
+        content_lines.append(f"**ID**: {short_perm}")
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": "orange",
+                "title": {"tag": "plain_text", "content": "OpenCode 权限请求"},
+            },
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(content_lines),
+                },
+                {"tag": "hr"},
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "允许"},
+                            "type": "primary",
+                            "value": {
+                                "action": f"cmd:/opencode-approve {session_id} {perm_id}",
+                            },
+                        },
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "拒绝"},
+                            "type": "danger",
+                            "value": {
+                                "action": f"cmd:/opencode-deny {session_id} {perm_id}",
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+        sent = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages"
+            f"?receive_id_type={receive_id_type}",
+            {
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            token,
+        )
+        message_id = str(sent.get("data", {}).get("message_id", ""))
+        if not message_id:
+            raise RuntimeError("Feishu API did not return message_id")
+        return message_id
+
+
+async def update_opencode_approval_card(
+    project: str,
+    message_id: str,
+    perm_type: str,
+    filepath: str,
+    decision: str,
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> str:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        if decision == "once":
+            template, title, detail = "green", "已允许: OpenCode 权限请求", "已允许，OpenCode 继续执行。"
+        elif decision == "reject":
+            template, title, detail = "red", "已拒绝: OpenCode 权限请求", "已拒绝，OpenCode 取消操作。"
+        else:
+            template, title, detail = "grey", "已处理: OpenCode 权限请求", "该权限请求已处理。"
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": template,
+                "title": {"tag": "plain_text", "content": title},
+            },
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**类型**: {perm_type}\n"
+                        f"**路径**: {filepath}\n\n"
+                        f"{detail}"
+                    ),
+                },
+            ],
+        }
+        sent = await _patch_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages/{message_id}",
+            {
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            token,
+        )
+        return str(sent.get("data", {}).get("message_id", message_id))

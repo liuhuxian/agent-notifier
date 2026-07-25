@@ -127,15 +127,56 @@ export const FeishuNotify = async ({ $, client, directory }) => {
         return
       }
 
-      let message = null
-      if (type === "session.error") {
-        message = buildErrorMessage(event?.properties)
-      } else if (type === "permission.asked") {
-        message = buildPermissionMessage(event?.properties)
+      if (type === "permission.asked") {
+        const props = event?.properties || {}
+        const patterns = (props?.patterns || []).join(", ")
+        const sid = props.sessionID || ""
+        const pid = props.id || ""
+        const permType = props.permission || "unknown"
+        const filepath = props?.metadata?.filepath || ""
+        const home = process.env.HOME || "~"
+        const replyFile = `/tmp/oc-perm-reply-${pid}.json`
+        const fs = require("fs")
+        try { fs.unlinkSync(replyFile) } catch {}
+        try {
+          const { execSync } = require("child_process")
+          execSync(`${home}/.local/bin/agent-notifier opencode-permission --session "${sid}" --perm "${pid}" --type "${permType}" --path "${filepath}" --pattern "${patterns}"`, { stdio: "ignore" })
+        } catch {}
+        const interval = setInterval(async () => {
+          try {
+            const reply = fs.readFileSync(replyFile, "utf8").trim()
+            if (reply !== "once" && reply !== "reject") return
+            clearInterval(interval)
+            try { fs.unlinkSync(replyFile) } catch {}
+            if (client?.postSessionIdPermissionsPermissionId) {
+              await client.postSessionIdPermissionsPermissionId({
+                path: { id: sid, permissionID: pid },
+                body: { response: reply },
+              })
+            }
+          } catch {}
+        }, 1000)
+        setTimeout(() => clearInterval(interval), 120000)
+        return
       }
 
-      if (!message) return
-      await sendMessage($, message)
+      if (type === "permission.replied") {
+        const props = event?.properties || {}
+        const pid = props.requestID || ""
+        const home = process.env.HOME || "~"
+        if (pid) {
+          try {
+            await $`${home}/.local/bin/agent-notifier opencode-reply-result --perm "${pid}" neutral`.quiet()
+          } catch {}
+        }
+        return
+      }
+
+      if (type === "session.error") {
+        const message = buildErrorMessage(event?.properties)
+        await sendMessage($, message)
+        return
+      }
     },
   }
 }

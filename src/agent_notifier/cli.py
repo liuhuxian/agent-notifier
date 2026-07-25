@@ -25,7 +25,7 @@ from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
 from .codex.sessions import discover_rollout_thread_ids
 from .config import NotifierConfig, Paths, initialize_user_config
-from .feishu import reply_approval_result_card, send_markdown_message, send_text_message
+from .feishu import reply_approval_result_card, send_markdown_message, send_opencode_approval_card, send_text_message
 from .hook_config import (
     decode_command,
     default_hooks_path,
@@ -76,6 +76,84 @@ async def send_configured_notification(
         receive_id_type=route.receive_id_type,
         text=text,
     )
+
+
+async def opencode_permission(
+    paths: Paths,
+    session_id: str,
+    perm_id: str,
+    perm_type: str,
+    filepath: str,
+    pattern: str = "",
+) -> str:
+    config = NotifierConfig.load(paths.config_file)
+    route = config.notification_routes.get("default")
+    if route is None:
+        raise ValueError("notification route 'default' is not configured")
+    message_id = await send_opencode_approval_card(
+        project=route.project,
+        receive_id=route.receive_id,
+        receive_id_type=route.receive_id_type,
+        session_id=session_id,
+        perm_id=perm_id,
+        perm_type=perm_type,
+        filepath=filepath,
+        pattern=pattern,
+    )
+    import json
+    meta_path = Path(f"/tmp/oc-perm-msg-{perm_id}.json")
+    meta_path.write_text(json.dumps({
+        "message_id": message_id,
+        "project": route.project,
+        "perm_type": perm_type,
+        "filepath": filepath,
+    }))
+    return message_id
+
+
+async def opencode_reply_result(
+    paths: Paths,
+    perm_id: str,
+    decision: str,
+) -> str:
+    from .feishu import update_opencode_approval_card
+    import json
+    meta_path = Path(f"/tmp/oc-perm-msg-{perm_id}.json")
+    if not meta_path.exists():
+        raise RuntimeError(f"no card metadata found for {perm_id}")
+    meta = json.loads(meta_path.read_text())
+    try:
+        meta_path.unlink()
+    except Exception:
+        pass
+    response = "once" if decision == "allow" else ("reject" if decision == "deny" else "neutral")
+    return await update_opencode_approval_card(
+        project=meta["project"],
+        message_id=meta["message_id"],
+        perm_type=meta.get("perm_type", "unknown"),
+        filepath=meta.get("filepath", ""),
+        decision=response,
+    )
+
+
+async def opencode_decide(
+    session_id: str,
+    perm_id: str,
+    decision: str,
+    base_url: str,
+) -> None:
+    from aiohttp import ClientSession
+
+    response_map = {"allow": "once", "deny": "reject"}
+    response = response_map.get(decision, decision)
+    async with ClientSession() as session:
+        async with session.post(
+            f"{base_url}/permission/{perm_id}/reply",
+            json={"reply": response},
+        ) as resp:
+            if resp.status >= 400:
+                text = await resp.text()
+                raise RuntimeError(f"opencode API error: {resp.status} {text}")
 
 
 def native_stop_hook(paths: Paths, payload_text: str) -> int:
@@ -849,6 +927,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read the notification body from stdin",
     )
+    oc_perm = sub.add_parser(
+        "opencode-permission", help="send an interactive opencode approval card"
+    )
+    oc_perm.add_argument("--session", required=True)
+    oc_perm.add_argument("--perm", required=True)
+    oc_perm.add_argument("--type", default="unknown")
+    oc_perm.add_argument("--path", default="")
+    oc_perm.add_argument("--pattern", default="")
+    oc_decide = sub.add_parser(
+        "opencode-decide", help="respond to an opencode permission request"
+    )
+    oc_decide.add_argument("--session", required=True)
+    oc_decide.add_argument("--perm", required=True)
+    oc_decide.add_argument("decision", choices=("allow", "deny"))
+    oc_decide.add_argument(
+        "--opencode-url",
+        default=os.environ.get("AGENT_NOTIFIER_OPENCODE_URL", "http://127.0.0.1:4098"),
+    )
+    oc_reply = sub.add_parser(
+        "opencode-reply-result", help="update an opencode approval card with the result"
+    )
+    oc_reply.add_argument("--perm", required=True)
+    oc_reply.add_argument("decision", choices=("allow", "deny", "neutral"))
     native_hook = sub.add_parser(
         "native-hook", help="handle a native Codex lifecycle hook"
     )
@@ -1023,6 +1124,25 @@ def main() -> None:
                 )
             )
             print(f"sent: {message_id}")
+        elif args.command == "opencode-permission":
+            message_id = asyncio.run(
+                opencode_permission(
+                    paths, args.session, args.perm, args.type, args.path, args.pattern
+                )
+            )
+            print(f"sent: {message_id}")
+        elif args.command == "opencode-decide":
+            asyncio.run(
+                opencode_decide(
+                    args.session, args.perm, args.decision, args.opencode_url
+                )
+            )
+            print(f"decided: {args.decision}")
+        elif args.command == "opencode-reply-result":
+            asyncio.run(
+                opencode_reply_result(paths, args.perm, args.decision)
+            )
+            print(f"card updated: {args.decision}")
         elif args.command == "native-hook":
             if args.hook_name == "stop":
                 native_stop_hook(paths, sys.stdin.read())
