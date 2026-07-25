@@ -127,18 +127,27 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             self.backend.prompt(session_id, "test", "cc_connect", emit)
         )
         await asyncio.sleep(0.05)
-        # First, register a text part
+        # Register assistant message
+        await self.client.events.put({
+            "type": "message.updated",
+            "properties": {
+                "sessionID": session_id,
+                "info": {"id": "msg_asst", "role": "assistant"},
+            },
+        })
+        # Register a text part belonging to the assistant message
         await self.client.events.put({
             "type": "message.part.updated",
             "properties": {
                 "sessionID": session_id,
-                "part": {"id": "prt_1", "type": "text", "text": ""},
+                "part": {"id": "prt_1", "messageID": "msg_asst", "type": "text", "text": ""},
             },
         })
         await self.client.events.put({
             "type": "message.part.delta",
             "properties": {
                 "sessionID": session_id,
+                "messageID": "msg_asst",
                 "partID": "prt_1",
                 "field": "text",
                 "delta": "Hello ",
@@ -148,6 +157,7 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             "type": "message.part.delta",
             "properties": {
                 "sessionID": session_id,
+                "messageID": "msg_asst",
                 "partID": "prt_1",
                 "field": "text",
                 "delta": "World",
@@ -179,10 +189,17 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.sleep(0.05)
         await self.client.events.put({
+            "type": "message.updated",
+            "properties": {
+                "sessionID": session_id,
+                "info": {"id": "msg_asst", "role": "assistant"},
+            },
+        })
+        await self.client.events.put({
             "type": "message.part.updated",
             "properties": {
                 "sessionID": session_id,
-                "part": {"id": "prt_reason", "type": "reasoning", "text": ""},
+                "part": {"id": "prt_reason", "messageID": "msg_asst", "type": "reasoning", "text": ""},
             },
         })
         await self.client.events.put({

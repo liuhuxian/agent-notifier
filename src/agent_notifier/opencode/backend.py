@@ -110,6 +110,7 @@ class OpencodeBackend:
         self._subscribers[session_id].append(queue)
         accumulated_text: list[str] = []
         part_types: dict[str, str] = {}
+        assistant_msg_ids: set[str] = set()
         try:
             await self._client.send_prompt(session_id, text)
             if self.progress.progress_card:
@@ -124,13 +125,20 @@ class OpencodeBackend:
                     )
                 props = event.get("properties") or {}
 
-                if event_type == "message.part.updated":
+                if event_type == "message.updated":
+                    info = props.get("info") or props.get("message") or {}
+                    if info.get("role") == "assistant":
+                        assistant_msg_ids.add(info.get("id", ""))
+
+                elif event_type == "message.part.updated":
                     part = props.get("part") or {}
+                    msg_id = part.get("messageID", "")
                     if part.get("type") == "text":
                         part_types[part["id"]] = "text"
-                        text_val = part.get("text", "")
-                        if text_val and not accumulated_text:
-                            accumulated_text.append(text_val.strip())
+                        if msg_id in assistant_msg_ids:
+                            text_val = part.get("text", "")
+                            if text_val and not accumulated_text:
+                                accumulated_text.append(text_val.strip())
                     elif part.get("type") == "reasoning":
                         part_types[part.get("id", "")] = "reasoning"
 
@@ -138,10 +146,12 @@ class OpencodeBackend:
                     part_id = props.get("partID", "")
                     field = props.get("field", "")
                     delta = props.get("delta", "")
+                    msg_id = props.get("messageID", "")
                     if (
                         part_types.get(part_id) == "text"
                         and field == "text"
                         and delta
+                        and msg_id in assistant_msg_ids
                     ):
                         accumulated_text.append(delta)
                         if self.progress.stream_preview:

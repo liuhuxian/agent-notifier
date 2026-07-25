@@ -92,20 +92,28 @@ class MultiBackendDispatcher:
     def config_path(self) -> Path | None:
         return self._config_path
 
-    def _resolve(self, external_key: str) -> tuple[str, AgentBackend]:
+    def _resolve(self, external_key: str) -> tuple[str, AgentBackend, str]:
+        """Returns (agent_type, backend, pinned_session_id)."""
         chat_id = _extract_chat_id(external_key)
-        agent_type = self._chat_routes.get(chat_id, "opencode")
+        raw = self._chat_routes.get(chat_id, "opencode")
+        if ":" in raw:
+            agent_type, pinned = raw.split(":", 1)
+        else:
+            agent_type, pinned = raw, ""
         if agent_type == "codex":
-            return "codex", self._codex
+            return "codex", self._codex, pinned
         if agent_type == "silent":
-            return "silent", self._silent
-        return "opencode", self._opencode
+            return "silent", self._silent, ""
+        return "opencode", self._opencode, pinned
 
     async def start_thread(
         self, cwd: str, project: str, external_key: str
     ) -> str:
-        agent_type, backend = self._resolve(external_key)
-        thread_id = await backend.start_thread(cwd, project, external_key)
+        agent_type, backend, pinned = self._resolve(external_key)
+        if pinned:
+            thread_id = await backend.resume_thread(pinned, cwd, project, external_key)
+        else:
+            thread_id = await backend.start_thread(cwd, project, external_key)
         self._thread_map[thread_id] = backend
         self._registry.set_active_agent(project, external_key, agent_type)
         return thread_id
@@ -113,8 +121,9 @@ class MultiBackendDispatcher:
     async def resume_thread(
         self, thread_id: str, cwd: str, project: str, external_key: str
     ) -> str:
-        agent_type, backend = self._resolve(external_key)
-        result = await backend.resume_thread(thread_id, cwd, project, external_key)
+        agent_type, backend, pinned = self._resolve(external_key)
+        target = pinned or thread_id
+        result = await backend.resume_thread(target, cwd, project, external_key)
         self._thread_map[result] = backend
         self._registry.set_active_agent(project, external_key, agent_type)
         return result
@@ -132,7 +141,9 @@ class MultiBackendDispatcher:
     def resolve_active_thread(
         self, project: str, external_key: str, fallback: str
     ) -> str:
-        agent_type, _ = self._resolve(external_key)
+        agent_type, _, pinned = self._resolve(external_key)
+        if pinned:
+            return pinned
         if agent_type == "codex":
             return self._codex.resolve_active_thread(project, external_key, fallback)
         if agent_type == "silent":
