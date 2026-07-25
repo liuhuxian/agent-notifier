@@ -25,6 +25,7 @@ class ApprovalRecord:
     approval_id: str
     thread_id: str
     feishu_message_id: str | None
+    payload: dict
 
 
 class ApprovalStore:
@@ -113,7 +114,7 @@ class ApprovalStore:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT approval_id, thread_id, feishu_message_id
+                SELECT approval_id, thread_id, feishu_message_id, payload_json
                 FROM approvals
                 WHERE approval_id = ?
                    OR approval_id LIKE ?
@@ -125,7 +126,13 @@ class ApprovalStore:
             return None
         if len(rows) > 1:
             raise ValueError(f"ambiguous approval id: {approval_id}")
-        return ApprovalRecord(*rows[0])
+        approval_id, thread_id, message_id, payload_json = rows[0]
+        return ApprovalRecord(
+            approval_id,
+            thread_id,
+            message_id,
+            json.loads(payload_json),
+        )
 
     def close(self) -> None:
         with self._lock:

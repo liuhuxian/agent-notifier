@@ -34,7 +34,7 @@ from .hook_config import (
 )
 from .native_hooks import build_completion_message, claim
 from .registry import SessionRegistry
-from .service import SharedService
+from .service import SharedService, approval_details
 from .versioning import (
     CompatibilityError,
     parse_cc_connect_version,
@@ -553,6 +553,7 @@ async def reply_approval_decision(
         registry.close()
     if mapping is None:
         raise ValueError(f"approval thread has no Feishu route: {record.thread_id}")
+    reason, operation = approval_details(record.payload)
     await reply_approval_result_card(
         project=mapping.project,
         message_id=record.feishu_message_id,
@@ -562,6 +563,8 @@ async def reply_approval_decision(
         session_label=mapping.session_label,
         thread_id=record.thread_id,
         cwd=mapping.cwd,
+        reason=reason,
+        operation=operation,
     )
 
 

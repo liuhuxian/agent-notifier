@@ -100,31 +100,37 @@ def build_approval_result_card(
     session_label: str,
     thread_id: str,
     cwd: str,
+    reason: str | None = None,
+    operation: str | None = None,
 ) -> dict[str, Any]:
     if status == "already_resolved":
-        template = "orange"
-        title = "审批已经处理"
+        template = "grey"
+        title = "已处理：Codex 权限请求"
         detail = "该权限请求已在其他终端处理，本次操作未改变审批结果。"
     elif decision == "allow":
         template = "green"
-        title = "已允许 Codex 权限请求"
+        title = "已允许：Codex 权限请求"
         detail = "Codex 已继续执行本次操作。"
     else:
         template = "red"
-        title = "已拒绝 Codex 权限请求"
+        title = "已拒绝：Codex 权限请求"
         detail = "Codex 已取消本次操作。"
+    content = (
+        f"会话：{session_label} | {thread_id[:8]}\n"
+        f"目录：`{cwd}`\n"
+        f"**请求 ID**：`{approval_id}`\n"
+    )
+    if reason is not None and operation is not None:
+        content += f"**原因**：{reason}\n**操作**：`{operation}`"
+    else:
+        content += detail
     return build_card_v2(
         template,
         title,
         [
             {
                 "tag": "markdown",
-                "content": (
-                    f"会话：{session_label} | {thread_id[:8]}\n"
-                    f"目录：`{cwd}`\n"
-                    f"**请求 ID**：`{approval_id}`\n"
-                    f"{detail}"
-                ),
+                "content": content,
             }
         ],
     )
@@ -424,6 +430,8 @@ async def reply_approval_result_card(
     session_label: str,
     thread_id: str,
     cwd: str,
+    reason: str | None = None,
+    operation: str | None = None,
     config_path: Path = DEFAULT_CC_CONFIG,
 ) -> str:
     settings = load_feishu_settings(project, config_path)
@@ -443,10 +451,12 @@ async def reply_approval_result_card(
             session_label,
             thread_id,
             cwd,
+            reason,
+            operation,
         )
-        result = await _post_json(
+        result = await _patch_json(
             session,
-            f"{settings['domain']}/open-apis/im/v1/messages/{message_id}/reply",
+            f"{settings['domain']}/open-apis/im/v1/messages/{message_id}",
             {
                 "msg_type": "interactive",
                 "content": json.dumps(card, ensure_ascii=False),

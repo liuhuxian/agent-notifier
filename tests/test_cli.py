@@ -886,6 +886,8 @@ class ApprovalReplyTest(unittest.IsolatedAsyncioTestCase):
                 session_label="workspace",
                 thread_id="thread-1",
                 cwd="/workspace",
+                reason="Codex 权限请求",
+                operation="(无命令摘要)",
             )
 
 

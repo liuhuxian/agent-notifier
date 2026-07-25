@@ -85,13 +85,24 @@ app_secret = "secret"
         handled = build_approval_result_card(
             "1234567890", "allow", "already_resolved", **context
         )
+        preserved = build_approval_result_card(
+            "1234567890", "allow", "resolved", reason="需要权限", operation="touch /tmp/test", **context
+        )
 
         self.assertEqual("green", allowed["header"]["template"])
         self.assertEqual("red", denied["header"]["template"])
-        self.assertEqual("orange", handled["header"]["template"])
-        self.assertIn("已允许", allowed["header"]["title"]["content"])
-        self.assertIn("已拒绝", denied["header"]["title"]["content"])
-        self.assertIn("已经处理", handled["header"]["title"]["content"])
+        self.assertEqual("grey", handled["header"]["template"])
+        self.assertEqual(
+            "已允许：Codex 权限请求", allowed["header"]["title"]["content"]
+        )
+        self.assertEqual(
+            "已拒绝：Codex 权限请求", denied["header"]["title"]["content"]
+        )
+        self.assertEqual(
+            "已处理：Codex 权限请求", handled["header"]["title"]["content"]
+        )
+        self.assertIn("**原因**：需要权限", preserved["body"]["elements"][0]["content"])
+        self.assertIn("**操作**：`touch /tmp/test`", preserved["body"]["elements"][0]["content"])
         self.assertIn(
             "会话：le-wm | 019e81c0",
             allowed["body"]["elements"][0]["content"],
