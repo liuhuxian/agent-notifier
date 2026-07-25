@@ -69,11 +69,13 @@ class ApprovalFanout:
         self,
         store: ApprovalStore | None = None,
         event_hub: ClientEventHub | None = None,
+        on_terminal_resolved: Callable[[str, str], Awaitable[None]] | None = None,
     ):
         self.event_hub = event_hub or ClientEventHub()
         self.pending: dict[str, PendingApproval] = {}
         self.lock = asyncio.Lock()
         self.store = store
+        self.on_terminal_resolved = on_terminal_resolved
 
     async def add_client(self, client_id: str, ws: web.WebSocketResponse) -> None:
         await self.event_hub.add_client(client_id, ws)
@@ -192,6 +194,16 @@ class ApprovalFanout:
             return True
         if pending is None:
             return True
+        if resolved_by == "terminal" and self.on_terminal_resolved:
+            try:
+                await self.on_terminal_resolved(
+                    token, "allow" if accepted else "deny"
+                )
+            except Exception:
+                logger.exception(
+                    "failed to update Feishu approval card after terminal resolution: %s",
+                    approval_short_id(token),
+                )
         routed = dict(message)
         routed["id"] = pending.original_id
         await pending.upstream.send_json(routed)
@@ -241,11 +253,14 @@ class AppServerProxy:
             Callable[[str, dict, str], Awaitable[None]] | None
         ) = None,
         on_token_usage: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_terminal_approval: Callable[[str, str], Awaitable[None]] | None = None,
     ):
         self.listen_socket = Path(listen_socket)
         self.upstream_socket = Path(upstream_socket)
         self.event_hub = ClientEventHub()
-        self.fanout = ApprovalFanout(approval_store, self.event_hub)
+        self.fanout = ApprovalFanout(
+            approval_store, self.event_hub, on_terminal_approval
+        )
         self.runner: web.AppRunner | None = None
         self.on_terminal_completion = on_terminal_completion
         self.on_remote_completion = on_remote_completion

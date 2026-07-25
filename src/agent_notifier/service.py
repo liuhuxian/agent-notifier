@@ -15,6 +15,7 @@ from .approvals import ApprovalStore
 from .config import NotifierConfig, Paths
 from .feishu import (
     remove_message_reaction,
+    reply_approval_result_card,
     send_approval_card,
     send_markdown_message,
     send_progress_message_with_onit,
@@ -128,6 +129,7 @@ class SharedService:
                         on_remote_progress=self._notify_remote_progress,
                         approval_store=self.approval_store,
                         on_approval_request=self._notify_approval_request,
+                        on_terminal_approval=self._notify_terminal_approval,
                         on_token_usage=self._record_token_usage,
                     )
                     await self.proxy.start()
@@ -358,6 +360,30 @@ class SharedService:
                 await self._send_to_mapping(
                     target_mapping, format_approval_message(token, request)
                 )
+
+    async def _notify_terminal_approval(self, token: str, decision: str) -> None:
+        """Turn a terminal-first approval into a grey card in Feishu."""
+        if self.approval_store is None or self.registry is None:
+            return
+        record = self.approval_store.find_by_prefix(approval_short_id(token))
+        if record is None or not record.feishu_message_id:
+            return
+        mapping = self.registry.find_by_thread(record.thread_id)
+        if mapping is None:
+            return
+        reason, operation = approval_details(record.payload)
+        await reply_approval_result_card(
+            project=mapping.project,
+            message_id=record.feishu_message_id,
+            approval_id=approval_short_id(token),
+            decision=decision,
+            status="already_resolved",
+            session_label=mapping.session_label,
+            thread_id=record.thread_id,
+            cwd=mapping.cwd,
+            reason=reason,
+            operation=operation,
+        )
 
     def _notification_route(self, name: str):
         route = self.config.notification_routes.get(name)
