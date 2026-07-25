@@ -261,7 +261,12 @@ async def send_markdown_message(
         token = await _tenant_access_token(session, settings)
         card = {
             "config": {"wide_screen_mode": True},
-            "elements": [{"tag": "markdown", "content": text}],
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": text},
+                }
+            ],
         }
         sent = await _post_json(
             session,
