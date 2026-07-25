@@ -169,9 +169,10 @@ class FeishuMessageTest(unittest.IsolatedAsyncioTestCase):
         payload = post_json.await_args.args[2]
         self.assertEqual("interactive", payload["msg_type"])
         card = json.loads(payload["content"])
+        self.assertEqual("2.0", card["schema"])
         self.assertEqual("通知", card["header"]["title"]["content"])
-        self.assertEqual("markdown", card["elements"][0]["tag"])
-        self.assertEqual("```text\nhello\n```", card["elements"][0]["content"])
+        self.assertEqual("markdown", card["body"]["elements"][0]["tag"])
+        self.assertEqual("```text\nhello\n```", card["body"]["elements"][0]["content"])
 
 
 if __name__ == "__main__":

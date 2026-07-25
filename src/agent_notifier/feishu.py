@@ -295,12 +295,13 @@ async def send_markdown_message(
             else text
         )
         card = {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True},
             "header": {
                 "template": "blue",
                 "title": {"tag": "plain_text", "content": title[:40]},
             },
-            "elements": [{"tag": "markdown", "content": body}],
+            "body": {"elements": [{"tag": "markdown", "content": body}]},
         }
         sent = await _post_json(
             session,
