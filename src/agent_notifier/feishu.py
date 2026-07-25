@@ -60,19 +60,20 @@ def build_approval_card(
             "tag": "button",
             "text": {"tag": "plain_text", "content": label},
             "type": kind,
-            "value": {
-                "action": f"cmd:{command} {approval_id}",
-                "session_key": session_key,
-            },
+            "width": "fill",
+            "behaviors": [{
+                "type": "callback",
+                "value": {
+                    "action": f"cmd:{command} {approval_id}",
+                    "session_key": session_key,
+                },
+            }],
         }
 
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "orange",
-            "title": {"tag": "plain_text", "content": "Codex 权限审批"},
-        },
-        "elements": [
+    return build_card_v2(
+        "orange",
+        "Codex 权限审批",
+        [
             {
                 "tag": "markdown",
                 "content": (
@@ -84,15 +85,12 @@ def build_approval_card(
                 ),
             },
             {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    button("允许", "primary", "/codex-approve"),
-                    button("拒绝", "danger", "/codex-deny"),
-                ],
-            },
+            build_button_set([
+                button("允许", "primary", "/codex-approve"),
+                button("拒绝", "danger", "/codex-deny"),
+            ]),
         ],
-    }
+    )
 
 
 def build_approval_result_card(
@@ -115,13 +113,10 @@ def build_approval_result_card(
         template = "red"
         title = "已拒绝 Codex 权限请求"
         detail = "Codex 已取消本次操作。"
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": template,
-            "title": {"tag": "plain_text", "content": title},
-        },
-        "elements": [
+    return build_card_v2(
+        template,
+        title,
+        [
             {
                 "tag": "markdown",
                 "content": (
@@ -131,6 +126,38 @@ def build_approval_result_card(
                     f"{detail}"
                 ),
             }
+        ],
+    )
+
+
+def build_card_v2(
+    template: str, title: str, elements: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Build a Feishu interactive Card V2 with the supplied body elements."""
+    return {
+        "schema": "2.0",
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": title[:40]},
+        },
+        "body": {"elements": elements},
+    }
+
+
+def build_button_set(buttons: list[dict[str, Any]]) -> dict[str, Any]:
+    """Place V2 buttons in one horizontal row."""
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [button],
+            }
+            for button in buttons
         ],
     }
 
@@ -294,15 +321,7 @@ async def send_markdown_message(
             if has_title
             else text
         )
-        card = {
-            "schema": "2.0",
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "template": "blue",
-                "title": {"tag": "plain_text", "content": title[:40]},
-            },
-            "body": {"elements": [{"tag": "markdown", "content": body}]},
-        }
+        card = build_markdown_card_v2(title, body)
         sent = await _post_json(
             session,
             f"{settings['domain']}/open-apis/im/v1/messages"
@@ -318,6 +337,19 @@ async def send_markdown_message(
         if not message_id:
             raise RuntimeError("Feishu API did not return message_id")
         return message_id
+
+
+def build_markdown_card_v2(title: str, body: str) -> dict[str, Any]:
+    """Build a blue Feishu Card V2 containing Markdown content."""
+    return {
+        "schema": "2.0",
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": title[:40]},
+        },
+        "body": {"elements": [{"tag": "markdown", "content": body}]},
+    }
 
 
 async def remove_message_reaction(
@@ -445,41 +477,43 @@ async def send_opencode_approval_card(
         if filepath:
             content_lines.append(f"**路径**: {filepath}")
         content_lines.append(f"**ID**: {short_perm}")
-        card = {
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "template": "orange",
-                "title": {"tag": "plain_text", "content": "OpenCode 权限请求"},
-            },
-            "elements": [
+        card = build_card_v2(
+            "orange",
+            "OpenCode 权限请求",
+            [
                 {
                     "tag": "markdown",
                     "content": "\n".join(content_lines),
                 },
                 {"tag": "hr"},
-                {
-                    "tag": "action",
-                    "actions": [
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "允许"},
-                            "type": "primary",
+                build_button_set([
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "允许"},
+                        "type": "primary",
+                        "width": "fill",
+                        "behaviors": [{
+                            "type": "callback",
                             "value": {
                                 "action": f"cmd:/opencode-approve {session_id} {perm_id}",
                             },
-                        },
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "拒绝"},
-                            "type": "danger",
+                        }],
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "拒绝"},
+                        "type": "danger",
+                        "width": "fill",
+                        "behaviors": [{
+                            "type": "callback",
                             "value": {
                                 "action": f"cmd:/opencode-deny {session_id} {perm_id}",
                             },
-                        },
-                    ],
-                },
+                        }],
+                    },
+                ]),
             ],
-        }
+        )
         sent = await _post_json(
             session,
             f"{settings['domain']}/open-apis/im/v1/messages"
@@ -514,13 +548,10 @@ async def update_opencode_approval_card(
             template, title, detail = "red", "已拒绝: OpenCode 权限请求", "已拒绝，OpenCode 取消操作。"
         else:
             template, title, detail = "grey", "已处理: OpenCode 权限请求", "该权限请求已处理。"
-        card = {
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "template": template,
-                "title": {"tag": "plain_text", "content": title},
-            },
-            "elements": [
+        card = build_card_v2(
+            template,
+            title,
+            [
                 {
                     "tag": "markdown",
                     "content": (
@@ -530,7 +561,7 @@ async def update_opencode_approval_card(
                     ),
                 },
             ],
-        }
+        )
         sent = await _patch_json(
             session,
             f"{settings['domain']}/open-apis/im/v1/messages/{message_id}",

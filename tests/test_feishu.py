@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from agent_notifier.feishu import (
     build_approval_card,
     build_approval_result_card,
+    build_markdown_card_v2,
     load_feishu_settings,
     send_markdown_message,
     send_text_message,
@@ -24,20 +25,31 @@ class FeishuCardTest(unittest.TestCase):
             thread_id="019e81c0-c415",
             cwd="/users/huxian/project/le-wm",
         )
-        content = card["elements"][0]["content"]
+        self.assertEqual("2.0", card["schema"])
+        self.assertEqual("orange", card["header"]["template"])
+        content = card["body"]["elements"][0]["content"]
         self.assertIn("会话：le-wm | 019e81c0", content)
         self.assertIn("目录：`/users/huxian/project/le-wm`", content)
-        actions = card["elements"][-1]["actions"]
-        allow, deny = actions
+        button_set = card["body"]["elements"][-1]
+        self.assertEqual("column_set", button_set["tag"])
+        self.assertEqual(2, len(button_set["columns"]))
+        allow = button_set["columns"][0]["elements"][0]
+        deny = button_set["columns"][1]["elements"][0]
         self.assertEqual(
-            "cmd:/codex-approve 1234567890", allow["value"]["action"]
+            "cmd:/codex-approve 1234567890",
+            allow["behaviors"][0]["value"]["action"],
         )
         self.assertEqual(
-            "cmd:/codex-deny 1234567890", deny["value"]["action"]
+            "cmd:/codex-deny 1234567890",
+            deny["behaviors"][0]["value"]["action"],
         )
-        self.assertNotIn("after_click", allow["value"])
-        self.assertNotIn("after_click", deny["value"])
-        self.assertEqual("feishu:chat:user", allow["value"]["session_key"])
+        self.assertNotIn("after_click", allow["behaviors"][0]["value"])
+        self.assertNotIn("after_click", deny["behaviors"][0]["value"])
+        self.assertEqual(
+            "feishu:chat:user",
+            allow["behaviors"][0]["value"]["session_key"],
+        )
+        self.assertEqual("button", allow["tag"])
 
     def test_project_feishu_credentials_are_loaded(self):
         # TOML is intentionally written directly to verify the deployed parser.
@@ -81,15 +93,29 @@ app_secret = "secret"
         self.assertIn("已拒绝", denied["header"]["title"]["content"])
         self.assertIn("已经处理", handled["header"]["title"]["content"])
         self.assertIn(
-            "会话：le-wm | 019e81c0", allowed["elements"][0]["content"]
+            "会话：le-wm | 019e81c0",
+            allowed["body"]["elements"][0]["content"],
         )
         self.assertIn(
             "目录：`/users/huxian/project/le-wm`",
-            allowed["elements"][0]["content"],
+            allowed["body"]["elements"][0]["content"],
         )
 
 
 class FeishuMessageTest(unittest.IsolatedAsyncioTestCase):
+    def test_completion_card_v2_has_fixed_blue_title_and_body(self):
+        card = build_markdown_card_v2(
+            "Codex 回合已完成",
+            "会话：le-wm | 019e81c0\n目录：/users/huxian/project/le-wm\n结果：\n\n```text\npass\n```",
+        )
+        self.assertEqual("2.0", card["schema"])
+        self.assertEqual("blue", card["header"]["template"])
+        self.assertEqual("Codex 回合已完成", card["header"]["title"]["content"])
+        self.assertEqual(
+            "会话：le-wm | 019e81c0\n目录：/users/huxian/project/le-wm\n结果：\n\n```text\npass\n```",
+            card["body"]["elements"][0]["content"],
+        )
+
     async def test_text_message_uses_configured_receive_id_type(self):
         class FakeSession:
             async def __aenter__(self):
