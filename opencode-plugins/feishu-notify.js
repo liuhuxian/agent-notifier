@@ -148,12 +148,11 @@ export const FeishuNotify = async ({ $, client, directory }) => {
             if (reply !== "once" && reply !== "reject") return
             clearInterval(interval)
             try { fs.unlinkSync(replyFile) } catch {}
-            if (client?.postSessionIdPermissionsPermissionId) {
-              await client.postSessionIdPermissionsPermissionId({
-                path: { id: sid, permissionID: pid },
-                body: { response: reply },
-              })
-            }
+            await fetch(`http://127.0.0.1:4098/permission/${pid}/reply`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reply }),
+            })
           } catch {}
         }, 1000)
         setTimeout(() => clearInterval(interval), 120000)

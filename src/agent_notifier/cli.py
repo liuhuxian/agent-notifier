@@ -99,6 +99,7 @@ async def opencode_permission(
         perm_type=perm_type,
         filepath=filepath,
         pattern=pattern,
+        session_key=route.session_key,
     )
     import json
     meta_path = Path(f"/tmp/oc-perm-msg-{perm_id}.json")

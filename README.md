@@ -174,6 +174,27 @@ project = "le-wm-codex"
 receive_id_type = "chat_id"
 receive_id = "oc_your_notification_group_chat_id"
 message_format = "markdown" # or "text"
+session_key = "feishu:oc_your_notification_chat_id:terminal:ses_your_session_id"
+```
+
+`session_key` 是 OpenCode 双端审批卡片需要的字段，格式为 `feishu:{chat_id}:terminal:{session_id}`。
+群A 的 ACP 路由也需要加这个字段（见下方 cc-connect 命令配置）。
+
+### OpenCode 审批按钮命令
+
+OpenCode 交互审批卡片依赖 cc-connect 自定义命令来处理按钮点击。
+在 `~/.cc-connect/config.toml` 的 `[[commands]]` 中添加：
+
+```toml
+[[commands]]
+name = "opencode-approve"
+description = "Approve an OpenCode permission request"
+exec = "sh -c 'echo once > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} allow >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+
+[[commands]]
+name = "opencode-deny"
+description = "Deny an OpenCode permission request"
+exec = "sh -c 'echo reject > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} deny >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
 ```
 
 `markdown` sends a text-only interactive card so Feishu renders emphasis,

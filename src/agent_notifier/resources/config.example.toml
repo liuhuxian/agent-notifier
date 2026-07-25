@@ -26,3 +26,11 @@ notify_interruption = true
 # receive_id_type = "chat_id"
 # receive_id = "oc_your_notification_group_chat_id"
 # message_format = "markdown" # or "text"
+# session_key = "feishu:oc_your_notification_group_chat_id:terminal:ses_your_session_id"
+#
+# [notification_routes.acp]
+# project = "le-wm-codex"
+# receive_id_type = "chat_id"
+# receive_id = "oc_your_acp_group_chat_id"
+# message_format = "markdown"
+# session_key = "feishu:oc_your_acp_group_chat_id:terminal:ses_your_session_id"

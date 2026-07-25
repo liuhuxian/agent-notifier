@@ -477,6 +477,7 @@ async def send_opencode_approval_card(
     perm_type: str,
     filepath: str,
     pattern: str = "",
+    session_key: str = "",
     config_path: Path = DEFAULT_CC_CONFIG,
 ) -> str:
     settings = load_feishu_settings(project, config_path)
@@ -507,7 +508,8 @@ async def send_opencode_approval_card(
                         "behaviors": [{
                             "type": "callback",
                             "value": {
-                                "action": f"cmd:/opencode-approve {session_id} {perm_id}",
+                                "action": f"cmd:/opencode-approve {perm_id}",
+                                **({"session_key": session_key} if session_key else {}),
                             },
                         }],
                     },
@@ -519,7 +521,8 @@ async def send_opencode_approval_card(
                         "behaviors": [{
                             "type": "callback",
                             "value": {
-                                "action": f"cmd:/opencode-deny {session_id} {perm_id}",
+                                "action": f"cmd:/opencode-deny {perm_id}",
+                                **({"session_key": session_key} if session_key else {}),
                             },
                         }],
                     },
