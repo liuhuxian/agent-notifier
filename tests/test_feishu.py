@@ -9,6 +9,7 @@ from agent_notifier.feishu import (
     build_approval_result_card,
     build_markdown_card_v2,
     load_feishu_settings,
+    send_progress_message_with_onit,
     send_markdown_message,
     send_text_message,
 )
@@ -210,6 +211,49 @@ class FeishuMessageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("通知", card["header"]["title"]["content"])
         self.assertEqual("markdown", card["body"]["elements"][0]["tag"])
         self.assertEqual("```text\nhello\n```", card["body"]["elements"][0]["content"])
+
+    async def test_progress_message_uses_v2_card_before_adding_onit(self):
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch(
+            "agent_notifier.feishu.load_feishu_settings",
+            return_value={
+                "app_id": "app",
+                "app_secret": "secret",
+                "domain": "https://open.feishu.cn",
+            },
+        ), patch(
+            "agent_notifier.feishu.ClientSession",
+            return_value=FakeSession(),
+        ), patch(
+            "agent_notifier.feishu._tenant_access_token",
+            new=AsyncMock(return_value="token"),
+        ), patch(
+            "agent_notifier.feishu._post_json",
+            new=AsyncMock(
+                side_effect=[
+                    {"data": {"message_id": "om_progress"}},
+                    {"data": {"reaction_id": "reaction"}},
+                ]
+            ),
+        ) as post_json:
+            message_id, reaction_id = await send_progress_message_with_onit(
+                project="le-wm-codex",
+                receive_id="ou_notify",
+                text="**处理中**\n\n```text\nstep 1\n```",
+            )
+
+        self.assertEqual(("om_progress", "reaction"), (message_id, reaction_id))
+        payload = post_json.await_args_list[0].args[2]
+        self.assertEqual("interactive", payload["msg_type"])
+        card = json.loads(payload["content"])
+        self.assertEqual("2.0", card["schema"])
+        self.assertEqual("**处理中**\n\n```text\nstep 1\n```", card["body"]["elements"][0]["content"])
 
 
 if __name__ == "__main__":

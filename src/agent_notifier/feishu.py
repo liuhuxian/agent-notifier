@@ -246,14 +246,15 @@ async def send_progress_message_with_onit(
     settings = load_feishu_settings(project, config_path)
     async with ClientSession() as session:
         token = await _tenant_access_token(session, settings)
+        card = build_markdown_card_v2("执行中", text)
         sent = await _post_json(
             session,
             f"{settings['domain']}/open-apis/im/v1/messages"
             "?receive_id_type=open_id",
             {
                 "receive_id": receive_id,
-                "msg_type": "text",
-                "content": json.dumps({"text": text}, ensure_ascii=False),
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
             },
             token,
         )
