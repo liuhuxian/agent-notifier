@@ -8,25 +8,25 @@ function buildPermissionMessage(props) {
   const permType = props?.permission || "unknown"
   const approvalId = (props?.id || "").slice(-8)
 
-  const lines = ["**opencode 权限请求**\n"]
-  lines.push(`- 类型: ${permType}`)
-  if (filepath) lines.push(`- 路径: ${filepath}`)
-  if (approvalId) lines.push(`- ID: ${approvalId}`)
+  const lines = ["OpenCode 权限请求"]
+  lines.push(`**类型**: ${permType}`)
+  if (filepath) lines.push(`**路径**: ${filepath}`)
+  if (approvalId) lines.push(`**ID**: ${approvalId}`)
   return lines.join("\n")
 }
 
 function buildCompletionHeader(sessionID, directory) {
   const sessionId = (sessionID || "").slice(-8)
-  const lines = ["**opencode: 回合完成**\n"]
-  if (directory) lines.push(`- 目录: ${directory}`)
-  if (sessionId) lines.push(`- 会话: ${sessionId}`)
+  const lines = ["OpenCode 回合已完成"]
+  if (sessionId) lines.push(`**会话**: ${sessionId}`)
+  if (directory) lines.push(`**目录**: ${directory}`)
   return lines.join("\n")
 }
 
 function buildErrorMessage(props) {
   const error = props?.error || props?.message || ""
-  const lines = ["**opencode: 错误**\n"]
-  if (error) lines.push(`- 详情: ${error}`)
+  const lines = ["OpenCode 错误"]
+  if (error) lines.push(`**详情**: ${error}`)
   return lines.join("\n")
 }
 
@@ -99,7 +99,7 @@ async function sendCompletionNotification(fn$, client, event, directory) {
     return
   }
 
-  const body = `${header}\n**结果:**\n\n${finalText}`
+  const body = `${header}\n**结果**:\n\n${finalText}`
   const chunks = chunkText(body, MAX_CHUNK)
   if (chunks.length === 1) {
     await sendMessage(fn$, chunks[0])

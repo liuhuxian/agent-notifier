@@ -259,14 +259,29 @@ async def send_markdown_message(
     settings = load_feishu_settings(project, config_path)
     async with ClientSession() as session:
         token = await _tenant_access_token(session, settings)
+        lines = text.splitlines()
+        candidate = lines[0].strip() if lines else ""
+        has_title = candidate.startswith((
+            "Codex 回合已完成",
+            "Codex 回合异常中断",
+            "OpenCode 回合已完成",
+            "OpenCode 回合异常中断",
+            "OpenCode 权限请求",
+            "OpenCode 错误",
+        ))
+        title = candidate[:40] if has_title else "通知"
+        body = (
+            "\n".join(lines[1:]).lstrip("\n")
+            if has_title
+            else text
+        )
         card = {
             "config": {"wide_screen_mode": True},
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {"tag": "lark_md", "content": text},
-                }
-            ],
+            "header": {
+                "template": "blue",
+                "title": {"tag": "plain_text", "content": title[:40]},
+            },
+            "elements": [{"tag": "markdown", "content": body}],
         }
         sent = await _post_json(
             session,
