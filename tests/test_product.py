@@ -224,7 +224,7 @@ class HookConfigTest(unittest.TestCase):
             "last-assistant-message": "one\n\n- two\n```bash\nrm -f /tmp/x\n```",
         })
         self.assertIn(
-            "结果：\n\none\n\n- two\n```bash\nrm -f /tmp/x\n```",
+            "**结果**：\n\none\n\n- two\n```bash\nrm -f /tmp/x\n```",
             message,
         )
         self.assertEqual("a\n\nb", format_result("a\n\nb"))

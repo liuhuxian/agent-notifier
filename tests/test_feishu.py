@@ -29,8 +29,8 @@ class FeishuCardTest(unittest.TestCase):
         self.assertEqual("2.0", card["schema"])
         self.assertEqual("orange", card["header"]["template"])
         content = card["body"]["elements"][0]["content"]
-        self.assertIn("会话：le-wm | 019e81c0", content)
-        self.assertIn("目录：`/users/huxian/project/le-wm`", content)
+        self.assertIn("**会话**：le-wm | 019e81c0", content)
+        self.assertIn("**目录**：`/users/huxian/project/le-wm`", content)
         button_set = card["body"]["elements"][-1]
         self.assertEqual("column_set", button_set["tag"])
         self.assertEqual(2, len(button_set["columns"]))
@@ -105,11 +105,11 @@ app_secret = "secret"
         self.assertIn("**原因**：需要权限", preserved["body"]["elements"][0]["content"])
         self.assertIn("**操作**：`touch /tmp/test`", preserved["body"]["elements"][0]["content"])
         self.assertIn(
-            "会话：le-wm | 019e81c0",
+            "**会话**：le-wm | 019e81c0",
             allowed["body"]["elements"][0]["content"],
         )
         self.assertIn(
-            "目录：`/users/huxian/project/le-wm`",
+            "**目录**：`/users/huxian/project/le-wm`",
             allowed["body"]["elements"][0]["content"],
         )
 

@@ -183,9 +183,9 @@ class SharedService:
         result = format_result(text) or "(无文本输出)"
         message = (
             "Codex 回合已完成\n"
-            f"会话：{mapping.session_label} | {mapping.short_thread_id}\n"
-            f"目录：{mapping.cwd}\n"
-            f"结果：\n\n{result}"
+            f"**会话**：{mapping.session_label} | {mapping.short_thread_id}\n"
+            f"**目录**：{mapping.cwd}\n"
+            f"**结果**：\n\n{result}"
         )
         await self._send_to_notification_route("default", message)
 

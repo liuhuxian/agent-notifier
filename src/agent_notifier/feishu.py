@@ -77,8 +77,8 @@ def build_approval_card(
             {
                 "tag": "markdown",
                 "content": (
-                    f"会话：{session_label} | {thread_id[:8]}\n"
-                    f"目录：`{cwd}`\n"
+                    f"**会话**：{session_label} | {thread_id[:8]}\n"
+                    f"**目录**：`{cwd}`\n"
                     f"**请求 ID**：`{approval_id}`\n"
                     f"**原因**：{reason}\n"
                     f"**操作**：`{operation}`"
@@ -116,8 +116,8 @@ def build_approval_result_card(
         title = "已拒绝：Codex 权限请求"
         detail = "Codex 已取消本次操作。"
     content = (
-        f"会话：{session_label} | {thread_id[:8]}\n"
-        f"目录：`{cwd}`\n"
+        f"**会话**：{session_label} | {thread_id[:8]}\n"
+        f"**目录**：`{cwd}`\n"
         f"**请求 ID**：`{approval_id}`\n"
     )
     if reason is not None and operation is not None:

@@ -151,9 +151,9 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
 
             message = send_message.await_args.kwargs["text"]
             self.assertIn("Codex 回合已完成", message)
-            self.assertIn("会话：le-wm | 019e81c0", message)
-            self.assertIn("目录：/users/huxian/project/le-wm", message)
-            self.assertIn("结果：\n\n任务执行完成", message)
+            self.assertIn("**会话**：le-wm | 019e81c0", message)
+            self.assertIn("**目录**：/users/huxian/project/le-wm", message)
+            self.assertIn("**结果**：\n\n任务执行完成", message)
             self.assertEqual(
                 "oc_notify", send_message.await_args.kwargs["receive_id"]
             )

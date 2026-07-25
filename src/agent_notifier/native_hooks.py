@@ -75,13 +75,13 @@ def build_completion_message(payload: dict) -> tuple[str, str] | None:
 
     lines = [
         "Codex 回合已完成",
-        f"会话：{project} | {thread_id[:8]}",
-        f"目录：{cwd}",
+        f"**会话**：{project} | {thread_id[:8]}",
+        f"**目录**：{cwd}",
     ]
     if task:
         lines.append(f"任务：{task}")
     if result:
-        lines.append("结果：\n\n" + result)
+        lines.append("**结果**：\n\n" + result)
     turn_id = _first(payload, "turn-id", "turn_id", "turnId", default="unknown")
     return "\n".join(lines), f"{thread_id}:{turn_id}"
 
