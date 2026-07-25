@@ -9,24 +9,24 @@ function buildPermissionMessage(props) {
   const approvalId = (props?.id || "").slice(-8)
 
   const lines = ["**opencode 权限请求**\n"]
-  lines.push(`- 类型: \`${permType}\``)
-  if (filepath) lines.push(`- 路径: \`${filepath}\``)
-  if (approvalId) lines.push(`- ID: \`${approvalId}\``)
+  lines.push(`- 类型: ${permType}`)
+  if (filepath) lines.push(`- 路径: ${filepath}`)
+  if (approvalId) lines.push(`- ID: ${approvalId}`)
   return lines.join("\n")
 }
 
 function buildCompletionHeader(sessionID, directory) {
   const sessionId = (sessionID || "").slice(-8)
   const lines = ["**opencode: 回合完成**\n"]
-  if (directory) lines.push(`- 目录: \`${directory}\``)
-  if (sessionId) lines.push(`- 会话: \`${sessionId}\``)
+  if (directory) lines.push(`- 目录: ${directory}`)
+  if (sessionId) lines.push(`- 会话: ${sessionId}`)
   return lines.join("\n")
 }
 
 function buildErrorMessage(props) {
   const error = props?.error || props?.message || ""
   const lines = ["**opencode: 错误**\n"]
-  if (error) lines.push(`- 详情: \`${error}\``)
+  if (error) lines.push(`- 详情: ${error}`)
   return lines.join("\n")
 }
 
