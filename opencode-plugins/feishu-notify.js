@@ -123,14 +123,18 @@ export const FeishuNotify = async ({ $, client, directory }) => {
       }
 
       if (type === "session.idle") {
-        await sendCompletionNotification($, client, event, directory)
+        const sid = event?.properties?.sessionID || ""
+        if (!require("fs").existsSync(`/tmp/oc-acp-active-${sid}`)) {
+          await sendCompletionNotification($, client, event, directory)
+        }
         return
       }
 
       if (type === "permission.asked") {
         const props = event?.properties || {}
-        const patterns = (props?.patterns || []).join(", ")
         const sid = props.sessionID || ""
+        const route = require("fs").existsSync(`/tmp/oc-acp-active-${sid}`) ? "acp" : "default"
+        const patterns = (props?.patterns || []).join(", ")
         const pid = props.id || ""
         const permType = props.permission || "unknown"
         const filepath = props?.metadata?.filepath || ""
@@ -138,10 +142,15 @@ export const FeishuNotify = async ({ $, client, directory }) => {
         const replyFile = `/tmp/oc-perm-reply-${pid}.json`
         const fs = require("fs")
         try { fs.unlinkSync(replyFile) } catch {}
-        try {
-          const { execSync } = require("child_process")
-          execSync(`${home}/.local/bin/agent-notifier opencode-permission --session "${sid}" --perm "${pid}" --type "${permType}" --path "${filepath}" --pattern "${patterns}"`, { stdio: "ignore" })
-        } catch {}
+        require("child_process").spawn(`${home}/.local/bin/agent-notifier`, [
+          "opencode-permission",
+          "--route", route,
+          "--session", sid,
+          "--perm", pid,
+          "--type", permType,
+          "--path", filepath,
+          "--pattern", patterns,
+        ], { stdio: "ignore" })
         const interval = setInterval(async () => {
           try {
             const reply = fs.readFileSync(replyFile, "utf8").trim()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from agent_notifier.config import ProgressConfig
@@ -111,7 +112,9 @@ class OpencodeBackend:
         accumulated_text: list[str] = []
         part_types: dict[str, str] = {}
         assistant_msg_ids: set[str] = set()
+        acp_flag = Path(f"/tmp/oc-acp-active-{session_id}")
         try:
+            acp_flag.write_text("1")
             await self._client.send_prompt(session_id, text)
             if self.progress.progress_card:
                 await emit({"kind": "status", "text": "正在思考"})
@@ -158,9 +161,7 @@ class OpencodeBackend:
                             await emit({"kind": "text", "text": delta})
 
                 elif event_type == "permission.asked":
-                    perm_id = props.get("id")
-                    if perm_id:
-                        await self._forward_permission(props, session_id, emit)
+                    pass
 
                 elif event_type == "session.idle":
                     final_text = "".join(accumulated_text).strip()
@@ -174,6 +175,10 @@ class OpencodeBackend:
                     )
                     raise RuntimeError(error)
         finally:
+            try:
+                acp_flag.unlink()
+            except Exception:
+                pass
             self._subscribers[session_id].remove(queue)
             if not self._subscribers[session_id]:
                 del self._subscribers[session_id]

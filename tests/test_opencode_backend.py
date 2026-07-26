@@ -244,10 +244,7 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             "properties": {"sessionID": session_id},
         })
         await asyncio.wait_for(task, timeout=2)
-        self.assertIn(
-            ("ses_test_perm", "perm_001", "once"),
-            self.client.permission_replies,
-        )
+        self.assertEqual("end_turn", task.result().get("stopReason"))
 
     async def test_prompt_raises_on_error(self):
         session_id = "ses_test_error"

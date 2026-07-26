@@ -85,11 +85,12 @@ async def opencode_permission(
     perm_type: str,
     filepath: str,
     pattern: str = "",
+    route_name: str = "default",
 ) -> str:
     config = NotifierConfig.load(paths.config_file)
-    route = config.notification_routes.get("default")
+    route = config.notification_routes.get(route_name)
     if route is None:
-        raise ValueError("notification route 'default' is not configured")
+        raise ValueError(f"notification route {route_name!r} is not configured")
     message_id = await send_opencode_approval_card(
         project=route.project,
         receive_id=route.receive_id,
@@ -939,6 +940,7 @@ def build_parser() -> argparse.ArgumentParser:
     oc_perm.add_argument("--type", default="unknown")
     oc_perm.add_argument("--path", default="")
     oc_perm.add_argument("--pattern", default="")
+    oc_perm.add_argument("--route", default="default")
     oc_decide = sub.add_parser(
         "opencode-decide", help="respond to an opencode permission request"
     )
@@ -1131,7 +1133,7 @@ def main() -> None:
         elif args.command == "opencode-permission":
             message_id = asyncio.run(
                 opencode_permission(
-                    paths, args.session, args.perm, args.type, args.path, args.pattern
+                    paths, args.session, args.perm, args.type, args.path, args.pattern, args.route
                 )
             )
             print(f"sent: {message_id}")
