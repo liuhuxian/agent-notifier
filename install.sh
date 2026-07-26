@@ -97,12 +97,67 @@ mkdir -p "$OPENCODE_PLUGIN_DIR"
 cp "$ROOT/opencode-plugins/feishu-notify.js" "$OPENCODE_PLUGIN_DIR/"
 if command -v opencode >/dev/null 2>&1; then
   echo "OpenCode plugin installed: $OPENCODE_PLUGIN_DIR/feishu-notify.js"
+  WORK_DIR=$(pwd)
+  OPENCODE_BIN=$(command -v opencode)
+  if [[ "$NO_SERVICE" == false ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    mkdir -p "$UNIT_HOME"
+    sed -e "s|@WORK_DIR@|$WORK_DIR|g" \
+      -e "s|@OPENCODE_BIN@|$OPENCODE_BIN|g" \
+      "$ROOT/systemd/opencode-serve.service" > "$UNIT_HOME/opencode-serve.service"
+    systemctl --user daemon-reload
+    systemctl --user enable opencode-serve.service
+    systemctl --user restart opencode-serve.service
+    echo "Opencode serve installed as user service: opencode-serve.service"
+  else
+    echo "Start opencode serve manually: opencode serve --port 4098"
+  fi
 else
   echo "OpenCode not found — plugin installed but requires OpenCode runtime"
   echo "OpenCode plugin: $OPENCODE_PLUGIN_DIR/feishu-notify.js"
+  echo
+  echo "After installing OpenCode, start the serve:"
+  echo "  opencode serve --port 4098"
 fi
 
 "$BIN" doctor
 echo
 echo "If Codex already has Stop/PermissionRequest hooks: agent-notifier configure-hooks"
 echo "Next: agent-notifier configure-cc --project <cc-connect-project-name>"
+echo
+echo "=== OpenCode approval card setup ==="
+echo "Add these commands to ~/.cc-connect/config.toml:"
+echo
+echo "  [[commands]]"
+echo "    name = \"opencode-approve\""
+echo "    description = \"Approve an OpenCode permission request\""
+echo "    exec = \"sh -c \\\"echo once > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} allow >/dev/null 2>&1 && date '+%Y-%m-%d %H:%M:%S'\\\"\""
+echo
+echo "  [[commands]]"
+echo "    name = \"opencode-deny\""
+echo "    description = \"Deny an OpenCode permission request\""
+echo "    exec = \"sh -c \\\"echo reject > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} deny >/dev/null 2>&1 && date '+%Y-%m-%d %H:%M:%S'\\\"\""
+echo
+echo "Add this to ~/.config/agent-notifier/config.toml:"
+echo
+echo "  [chat_routes]"
+echo "  oc_YOUR_GROUP_A_CHAT_ID = \"opencode:<session_id>\""
+echo "  oc_YOUR_GROUP_B_CHAT_ID = \"silent\""
+echo
+echo "  [notification_routes.default]"
+echo "  project = \"<cc-connect-project-name>\""
+echo "  receive_id_type = \"chat_id\""
+echo "  receive_id = \"oc_YOUR_GROUP_B_CHAT_ID\""
+echo "  message_format = \"markdown\""
+echo "  session_key = \"feishu:oc_YOUR_GROUP_B_CHAT_ID:terminal:<session_id>\""
+echo
+echo "  [notification_routes.acp]"
+echo "  project = \"<cc-connect-project-name>\""
+echo "  receive_id_type = \"chat_id\""
+echo "  receive_id = \"oc_YOUR_GROUP_A_CHAT_ID\""
+echo "  message_format = \"markdown\""
+echo "  session_key = \"feishu:oc_YOUR_GROUP_A_CHAT_ID:terminal:<session_id>\""
+echo
+echo "Get chat IDs by sending /whoami in each group chat."
+echo "Then register the terminal session with cc-connect:"
+echo "  agent-notifier bind-terminal --thread-id <session_id> --route default"
+echo "  agent-notifier bind-terminal --thread-id <session_id> --route acp"

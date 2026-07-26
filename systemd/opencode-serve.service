@@ -1,0 +1,12 @@
+[Unit]
+Description=Opencode Serve
+After=network.target
+
+[Service]
+WorkingDirectory=@WORK_DIR@
+ExecStart=@OPENCODE_BIN@ serve --port 4098
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

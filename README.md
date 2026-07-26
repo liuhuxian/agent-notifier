@@ -96,10 +96,58 @@ CI、容器或不希望立即安装服务时：
 ~/.local/share/agent-notifier/venv/
 ~/.config/agent-notifier/config.toml
 ~/.config/systemd/user/agent-notifier.service
+~/.config/systemd/user/opencode-serve.service   (需要 opencode)
+~/.config/opencode/plugins/feishu-notify.js      (需要 opencode)
 ```
 
 安装包内包含带注释的默认配置模板。首次安装会复制到
 `~/.config/agent-notifier/config.toml`；重复安装不会覆盖用户已有配置。
+
+### OpenCode 配置
+
+安装器会自动复制 opencode 插件和 systemd 服务（如果检测到 `opencode`）。
+额外需要手动配置的步骤：
+
+**1. 在 `~/.cc-connect/config.toml` 中注册审批按钮命令：**
+
+```toml
+[[commands]]
+  name = "opencode-approve"
+  exec = "sh -c 'echo once > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} allow >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+
+[[commands]]
+  name = "opencode-deny"
+  exec = "sh -c 'echo reject > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} deny >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+```
+
+**2. 在 `~/.config/agent-notifier/config.toml` 中配置聊天路由和通知目标：**
+
+```toml
+[chat_routes]
+oc_YOUR_GROUP_A_CHAT_ID = "opencode:<session_id>"
+oc_YOUR_GROUP_B_CHAT_ID = "silent"
+
+[notification_routes.default]
+project = "le-wm-codex"
+receive_id_type = "chat_id"
+receive_id = "oc_YOUR_GROUP_B_CHAT_ID"
+message_format = "markdown"
+session_key = "feishu:oc_YOUR_GROUP_B_CHAT_ID:terminal:<session_id>"
+
+[notification_routes.acp]
+project = "le-wm-codex"
+receive_id_type = "chat_id"
+receive_id = "oc_YOUR_GROUP_A_CHAT_ID"
+message_format = "markdown"
+session_key = "feishu:oc_YOUR_GROUP_A_CHAT_ID:terminal:<session_id>"
+```
+
+在每个群聊中发送 `/whoami` 获取 chat_id。然后将本地 opencode session 注册到 cc connect 进行卡片识别：
+
+```bash
+agent-notifier bind-terminal --thread-id <session_id> --route default
+agent-notifier bind-terminal --thread-id <session_id> --route acp
+```
 
 运行状态不会写回 Git 仓库：
 

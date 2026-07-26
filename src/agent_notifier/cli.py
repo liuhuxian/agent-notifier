@@ -78,6 +78,30 @@ async def send_configured_notification(
     )
 
 
+def bind_opencode_terminal(
+    paths: Paths, thread_id: str, route_name: str = "default"
+) -> SessionMapping:
+    config = NotifierConfig.load(paths.config_file)
+    route = config.notification_routes.get(route_name)
+    if route is None:
+        raise ValueError(f"notification route {route_name!r} is not configured")
+    if not route.session_key:
+        raise ValueError(
+            f"notification route {route_name!r} has no session_key configured"
+        )
+    registry = SessionRegistry(paths.state_db)
+    try:
+        return registry.bind(
+            "cc_connect",
+            route.project,
+            route.session_key,
+            thread_id,
+            os.getcwd(),
+        )
+    finally:
+        registry.close()
+
+
 async def opencode_permission(
     paths: Paths,
     session_id: str,
@@ -881,6 +905,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bind.add_argument("thread_id")
     bind.add_argument("--project", required=True)
+    bind_terminal = sub.add_parser(
+        "bind-terminal",
+        help="register an opencode terminal session for cc-connect card recognition",
+    )
+    bind_terminal.add_argument("--thread-id", required=True)
+    bind_terminal.add_argument("--route", default="default")
     activate = sub.add_parser(
         "activate", help="select a subscribed Codex thread for incoming chat tasks"
     )
@@ -1047,6 +1077,9 @@ def main() -> None:
                 project=args.project,
                 cwd=os.getcwd(),
             )
+            print(f"bound: {mapping.project} <- {mapping.thread_id}")
+        elif args.command == "bind-terminal":
+            mapping = bind_opencode_terminal(paths, args.thread_id, args.route)
             print(f"bound: {mapping.project} <- {mapping.thread_id}")
         elif args.command == "activate":
             mapping = activate_terminal_thread(
