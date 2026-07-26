@@ -78,6 +78,19 @@ async def send_configured_notification(
     )
 
 
+def send_opencode_tool_event(paths: Paths, payload_text: str) -> None:
+    """Forward one OpenCode tool lifecycle event to the active ACP bridge."""
+    payload = json.loads(payload_text)
+    if not isinstance(payload, dict):
+        raise ValueError("OpenCode tool event must be a JSON object")
+    socket_path = paths.runtime_dir / "opencode-tools.sock"
+    if not socket_path.exists():
+        return
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        sock.sendto(data, str(socket_path))
+
+
 def bind_opencode_terminal(
     paths: Paths, thread_id: str, route_name: str = "default"
 ) -> SessionMapping:
@@ -729,7 +742,11 @@ async def run_acp_opencode(paths: Paths, base_url: str) -> None:
         return await server.call_client("session/request_permission", params)
 
     backend = OpencodeBackend(
-        client, registry, request_permission, config.progress
+        client,
+        registry,
+        request_permission,
+        config.progress,
+        paths.runtime_dir / "opencode-tools.sock",
     )
     server = ACPStdioServer(backend, sys.stdin, sys.stdout)
     server_ref["server"] = server
@@ -766,7 +783,11 @@ async def run_acp_multi(paths: Paths, base_url: str) -> None:
 
     codex_backend = CodexBackend(codex_rpc, registry, config.progress)
     opencode_backend = OpencodeBackend(
-        opencode_client, registry, request_permission, config.progress
+        opencode_client,
+        registry,
+        request_permission,
+        config.progress,
+        paths.runtime_dir / "opencode-tools.sock",
     )
 
     dispatcher = MultiBackendDispatcher(
@@ -961,6 +982,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--stdin",
         action="store_true",
         help="read the notification body from stdin",
+    )
+    tool_event = sub.add_parser(
+        "opencode-tool-event", help="forward an OpenCode tool lifecycle event"
+    )
+    tool_event.add_argument(
+        "--stdin", action="store_true", required=True,
+        help="read the event JSON from stdin",
     )
     oc_perm = sub.add_parser(
         "opencode-permission", help="send an interactive opencode approval card"
@@ -1163,6 +1191,8 @@ def main() -> None:
                 )
             )
             print(f"sent: {message_id}")
+        elif args.command == "opencode-tool-event":
+            send_opencode_tool_event(paths, sys.stdin.read())
         elif args.command == "opencode-permission":
             message_id = asyncio.run(
                 opencode_permission(

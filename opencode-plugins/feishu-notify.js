@@ -74,6 +74,33 @@ async function sendMessage(fn$, message) {
   }
 }
 
+async function sendToolEvent(payload) {
+  try {
+    const home = process.env.HOME || "~"
+    const { execFile } = require("child_process")
+    await new Promise((resolve) => {
+      const child = execFile(
+        `${home}/.local/bin/agent-notifier`,
+        ["opencode-tool-event", "--stdin"],
+        { timeout: 2000 },
+        () => resolve(),
+      )
+      child.stdin.end(JSON.stringify(payload))
+    })
+  } catch {
+    // ACP may not be running; tool progress is best effort.
+  }
+}
+
+function compactValue(value, maxLen = 12000) {
+  try {
+    const text = typeof value === "string" ? value : JSON.stringify(value ?? {})
+    return text.length > maxLen ? `${text.slice(0, maxLen)}…` : value
+  } catch {
+    return {}
+  }
+}
+
 async function sendCompletionNotification(fn$, client, event, directory) {
   const props = event?.properties || {}
   const sessionID = props.sessionID
@@ -114,6 +141,29 @@ async function sendCompletionNotification(fn$, client, event, directory) {
 
 export const FeishuNotify = async ({ $, client, directory }) => {
   return {
+    "tool.execute.before": async ({ tool, sessionID, callID }, output) => {
+      await sendToolEvent({
+        phase: "start",
+        sessionID,
+        callID,
+        tool,
+        title: `OpenCode: ${tool}`,
+        args: compactValue(output?.args),
+      })
+    },
+
+    "tool.execute.after": async ({ tool, sessionID, callID, args }, output) => {
+      await sendToolEvent({
+        phase: "complete",
+        sessionID,
+        callID,
+        tool,
+        args: compactValue(args),
+        output: compactValue(output?.output),
+        error: output?.metadata?.error || undefined,
+      })
+    },
+
     event: async ({ event }) => {
       const type = event?.type
       if (!type) return

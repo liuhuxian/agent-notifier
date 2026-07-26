@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import socket
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -21,6 +24,7 @@ class OpencodeBackend:
         registry: SessionRegistry,
         request_permission: Callable[[dict], Awaitable[dict]],
         progress: ProgressConfig | None = None,
+        tool_event_socket: Path | None = None,
     ):
         self._client = client
         self.registry = registry
@@ -29,10 +33,72 @@ class OpencodeBackend:
         self._session_ids: dict[str, str] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self._dispatcher: asyncio.Task | None = None
+        self._tool_event_socket = tool_event_socket
+        self._tool_event_task: asyncio.Task | None = None
+        self._active_emitters: dict[str, Callable[[dict], Awaitable[None]]] = {}
+        self._tool_sock: socket.socket | None = None
 
     def _ensure_dispatcher(self) -> None:
         if self._dispatcher is None:
             self._dispatcher = asyncio.create_task(self._dispatch_events())
+
+    def _ensure_tool_event_listener(self) -> None:
+        if self._tool_event_socket is not None and self._tool_event_task is None:
+            self._tool_event_task = asyncio.create_task(self._tool_event_loop())
+
+    async def _tool_event_loop(self) -> None:
+        path = self._tool_event_socket
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sock: socket.socket | None = None
+        try:
+            if path.exists():
+                path.unlink()
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            sock.bind(str(path))
+            os.chmod(path, 0o600)
+            self._tool_sock = sock
+            loop = asyncio.get_running_loop()
+            while True:
+                raw = await loop.sock_recv(sock, 65535)
+                try:
+                    event = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                session_id = str(event.get("sessionID") or "")
+                emit = self._active_emitters.get(session_id)
+                if emit is None:
+                    continue
+                phase = event.get("phase")
+                call_id = str(event.get("callID") or "")
+                if not call_id or phase not in {"start", "complete"}:
+                    continue
+                if phase == "start":
+                    await emit({
+                        "kind": "tool_start",
+                        "tool_call_id": call_id,
+                        "title": str(event.get("title") or event.get("tool") or "opencode tool"),
+                        "tool_kind": "other",
+                        "raw_input": event.get("args") or {},
+                    })
+                else:
+                    await emit({
+                        "kind": "tool_complete",
+                        "tool_call_id": call_id,
+                        "status": "failed" if event.get("error") else "completed",
+                    })
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._tool_sock is not None:
+                self._tool_sock.close()
+                self._tool_sock = None
+            elif sock is not None:
+                sock.close()
+            if path.exists():
+                path.unlink()
 
     async def _dispatch_events(self) -> None:
         while True:
@@ -107,6 +173,7 @@ class OpencodeBackend:
         emit: Callable[[dict], Awaitable[None]],
     ) -> dict:
         self._ensure_dispatcher()
+        self._ensure_tool_event_listener()
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers[session_id].append(queue)
         accumulated_text: list[str] = []
@@ -114,6 +181,7 @@ class OpencodeBackend:
         assistant_msg_ids: set[str] = set()
         acp_flag = Path(f"/tmp/oc-acp-active-{session_id}")
         try:
+            self._active_emitters[session_id] = emit
             acp_flag.write_text("1")
             await self._client.send_prompt(session_id, text)
             if self.progress.progress_card:
@@ -175,6 +243,7 @@ class OpencodeBackend:
                     )
                     raise RuntimeError(error)
         finally:
+            self._active_emitters.pop(session_id, None)
             self._subscribers[session_id].remove(queue)
             if not self._subscribers[session_id]:
                 del self._subscribers[session_id]
@@ -244,6 +313,10 @@ class OpencodeBackend:
                 )
 
     async def close(self) -> None:
+        if self._tool_event_task:
+            self._tool_event_task.cancel()
+            await asyncio.gather(self._tool_event_task, return_exceptions=True)
+            self._tool_event_task = None
         if self._dispatcher:
             self._dispatcher.cancel()
             await asyncio.gather(self._dispatcher, return_exceptions=True)

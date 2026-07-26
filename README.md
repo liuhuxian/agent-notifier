@@ -249,6 +249,13 @@ exec = "sh -c 'echo reject > /tmp/oc-perm-reply-{{1}}.json && agent-notifier ope
 lists, line breaks, and fenced code blocks. `text` sends a plain Feishu text
 message and displays Markdown syntax literally.
 
+When OpenCode is used through the ACP bridge, the installed plugin also forwards
+`tool.execute.before/after` lifecycle events through a local Unix datagram socket.
+The ACP backend converts them to `tool_call` and `tool_call_update`, so Feishu can
+show separate intermediate tool cards with the moving OnIt reaction. This path is
+best effort; if the ACP bridge or plugin is unavailable, the normal final result
+card still works.
+
 该群可同时在 `[chat_routes]` 中配置为 `silent`，从而只接收通知、不启动
 Codex/OpenCode 对话。分流规则为：
 

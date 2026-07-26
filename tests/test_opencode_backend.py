@@ -1,6 +1,8 @@
 """Tests for the opencode backend."""
 
 import asyncio
+import json
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,6 +82,61 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session_id.startswith("ses_test_"))
         mapping = self.registry.get("cc_connect", "le-wm", "feishu:one")
         self.assertEqual(session_id, mapping.thread_id)
+
+    async def test_tool_lifecycle_socket_emits_acp_events(self):
+        socket_path = Path(self.tmp.name) / "opencode-tools.sock"
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            probe.bind(str(socket_path))
+        except PermissionError:
+            probe.close()
+            self.skipTest("sandbox does not allow Unix datagram sockets")
+        finally:
+            probe.close()
+            socket_path.unlink(missing_ok=True)
+        backend = OpencodeBackend(
+            self.client,
+            self.registry,
+            self._fake_request_permission,
+            progress=ProgressConfig(),
+            tool_event_socket=socket_path,
+        )
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        backend._active_emitters["ses_tool"] = emit
+        backend._ensure_tool_event_listener()
+        for _ in range(50):
+            if socket_path.exists():
+                break
+            await asyncio.sleep(0.01)
+        self.assertTrue(socket_path.exists())
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sender:
+            for payload in (
+                {
+                    "phase": "start",
+                    "sessionID": "ses_tool",
+                    "callID": "call-1",
+                    "tool": "bash",
+                    "args": {"command": "echo hi"},
+                },
+                {
+                    "phase": "complete",
+                    "sessionID": "ses_tool",
+                    "callID": "call-1",
+                },
+            ):
+                sender.sendto(json.dumps(payload).encode(), str(socket_path))
+        for _ in range(50):
+            if len(events) == 2:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual("tool_start", events[0]["kind"])
+        self.assertEqual("call-1", events[0]["tool_call_id"])
+        self.assertEqual("tool_complete", events[1]["kind"])
+        await backend.close()
 
     async def test_resume_thread_uses_registry(self):
         self.registry.bind(
