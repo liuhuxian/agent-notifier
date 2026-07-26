@@ -95,6 +95,24 @@ class CodexBindingTest(unittest.TestCase):
         self.assertEqual("default", args.route)
         self.assertTrue(args.stdin)
 
+    def test_setup_and_strict_doctor_parsers(self):
+        setup = build_parser().parse_args(
+            [
+                "setup",
+                "--non-interactive",
+                "--project",
+                "le-wm-codex",
+                "--interactive-chat-id",
+                "oc_a",
+                "--notification-chat-id",
+                "oc_b",
+            ]
+        )
+        doctor = build_parser().parse_args(["doctor", "--strict"])
+        self.assertTrue(setup.non_interactive)
+        self.assertEqual("oc_a", setup.interactive_chat_id)
+        self.assertTrue(doctor.strict)
+
     def test_configured_notification_uses_named_route(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))

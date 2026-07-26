@@ -35,6 +35,7 @@ from .hook_config import (
 from .native_hooks import build_completion_message, claim
 from .registry import SessionRegistry
 from .service import SharedService, approval_details
+from .setup import run_setup
 from .versioning import (
     CompatibilityError,
     parse_cc_connect_version,
@@ -644,10 +645,14 @@ def _cc_connect_binary() -> str:
 
 
 def check_versions(
-    require_cc: bool = True, codex_binary: str = "codex"
+    require_cc: bool = True,
+    codex_binary: str = "codex",
+    require_codex: bool = True,
 ) -> tuple[str, str | None]:
-    codex_version = parse_codex_version(_run_version([codex_binary, "--version"]))
-    require_supported_version("codex", codex_version)
+    codex_version = "not checked"
+    if require_codex:
+        codex_version = parse_codex_version(_run_version([codex_binary, "--version"]))
+        require_supported_version("codex", codex_version)
     cc_version = None
     if require_cc:
         cc_version = parse_cc_connect_version(
@@ -1029,7 +1034,19 @@ def build_parser() -> argparse.ArgumentParser:
     decide.add_argument("decision", choices=("allow", "deny"))
     decide.add_argument("approval_id")
     sub.add_parser("status", help="show service status")
-    sub.add_parser("doctor", help="validate versions, paths, and service")
+    doctor = sub.add_parser("doctor", help="validate versions, paths, and service")
+    doctor.add_argument(
+        "--strict",
+        action="store_true",
+        help="also require cc-connect, configured notification routes, and OpenCode",
+    )
+    setup = sub.add_parser(
+        "setup", help="configure local chat routes without storing credentials"
+    )
+    setup.add_argument("--project")
+    setup.add_argument("--interactive-chat-id")
+    setup.add_argument("--notification-chat-id")
+    setup.add_argument("--non-interactive", action="store_true")
     sub.add_parser(
         "init-config",
         help="create the default Agent Notifier config if it is missing",
@@ -1232,16 +1249,62 @@ def main() -> None:
             print(f"pid: {pid}")
             print(f"socket: {paths.proxy_socket}")
         elif args.command == "doctor":
-            codex_version, cc_version = check_versions(require_cc=True)
-            print(f"Codex CLI: {codex_version} (supported)")
-            print(f"cc-connect: {cc_version} (supported)")
+            codex_version, cc_version = check_versions(
+                require_cc=args.strict,
+                require_codex=args.strict,
+            )
+            print(
+                f"Codex CLI: {codex_version if args.strict else 'not checked'}"
+                f"{' (supported)' if args.strict else ''}"
+            )
+            print(
+                f"cc-connect: {cc_version + ' (supported)' if cc_version else 'not checked'}"
+            )
+            opencode = shutil.which("opencode")
+            opencode_version = "not found"
+            if opencode:
+                try:
+                    opencode_version = _run_version([opencode, "--version"]).strip().splitlines()[0]
+                except (OSError, RuntimeError):
+                    opencode_version = f"found at {opencode}, version unavailable"
+            print(f"OpenCode: {opencode_version}")
             print(f"state: {paths.state_dir}")
             print(f"runtime: {paths.runtime_dir}")
             print(f"service: {'running' if _socket_ready(paths.proxy_socket) else 'stopped'}")
+            if args.strict:
+                config = NotifierConfig.load(paths.config_file)
+                missing = [
+                    name for name in ("default", "acp")
+                    if name not in config.notification_routes
+                ]
+                if missing:
+                    raise ValueError(
+                        "missing notification routes: " + ", ".join(missing)
+                    )
+                from .multi_backend import _load_chat_routes
+                chat_routes = _load_chat_routes(paths.config_file)
+                if "opencode" not in chat_routes.values() or "silent" not in chat_routes.values():
+                    raise ValueError(
+                        "chat_routes must contain an opencode interactive chat and a silent notification chat"
+                    )
+                if not opencode:
+                    raise FileNotFoundError("OpenCode is required by doctor --strict")
+                print("routes: default, acp, chat_routes (configured)")
         elif args.command == "init-config":
             initialized = initialize_user_config(paths)
             state = "created" if initialized.created else "exists"
             print(f"{state}: {initialized.path}")
+        elif args.command == "setup":
+            initialized = initialize_user_config(paths)
+            if initialized.created:
+                print(f"created: {initialized.path}")
+            run_setup(
+                paths,
+                project=args.project,
+                interactive_chat=args.interactive_chat_id,
+                notification_chat=args.notification_chat_id,
+                non_interactive=args.non_interactive,
+            )
         elif args.command == "logs":
             journalctl = shutil.which("journalctl")
             if journalctl:

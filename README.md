@@ -3,8 +3,7 @@
 Agent Notifier 让终端中的原生 Coding Agent 与 cc-connect/飞书共享同一会话，
 并提供可靠的任务完成通知和远程权限审批。
 
-首版只实现 Codex adapter，但核心会话、通知和审批模块不依赖 Codex，后续可
-增加 OpenCode adapter。
+当前同时支持 Codex 和 OpenCode；安装器会根据本机可用的 agent 选择后端。
 
 ## 当前兼容版本
 
@@ -14,11 +13,11 @@ Agent Notifier 让终端中的原生 Coding Agent 与 cc-connect/飞书共享同
 | cc-connect | 支持 | **1.3.2**，commit `19406df9` |
 | Python | 支持 | 3.10+ |
 | Linux systemd user service | 支持 | 当前主路径 |
-| OpenCode | 尚未实现 | 计划作为后续 adapter |
+| OpenCode | 支持 | 当前插件/API 组合，安装时检测 |
 
-Agent Notifier 依赖 Codex App Server 和 cc-connect ACP 协议。这两个协议仍在
-演进，因此默认拒绝未经验证的 Codex/cc-connect 版本，而不是带着未知兼容性继续
-运行。升级任一组件后，先运行：
+完整 multi 后端依赖 Codex App Server、OpenCode 和 cc-connect ACP 协议。这些协议仍在
+演进，因此 Codex/cc-connect 默认拒绝未经验证的版本；OpenCode 当前做存在性和
+`--version` 检查，具体 API 兼容性仍需通过冒烟测试确认。升级任一组件后，先运行：
 
 ```bash
 agent-notifier doctor
@@ -77,7 +76,52 @@ agent-notifier doctor
 
 ```bash
 cd /path/to/agent-notifier
-./install.sh
+./install.sh                         # 自动选择 codex/opencode/multi
+# 也可以明确选择：./install.sh --backend multi
+```
+
+安装包不会保存飞书密钥、群聊 ID 或旧会话 ID。密钥继续由 cc-connect 管理；首次
+部署到新电脑后运行初始化向导：
+
+```bash
+agent-notifier setup
+```
+
+向导会配置：
+
+- cc-connect project
+- 交互群（Group A）chat ID
+- 通知群（Group B）chat ID
+- `[chat_routes]` 和 `notification_routes`
+
+如果需要脚本化部署，可以显式传参：
+
+```bash
+agent-notifier setup --non-interactive \
+  --project le-wm-codex \
+  --interactive-chat-id oc_group_a \
+  --notification-chat-id oc_group_b
+```
+
+然后配置 cc-connect 项目并执行严格检查：
+
+```bash
+agent-notifier configure-cc --project le-wm-codex
+agent-notifier doctor --strict
+```
+
+`doctor --strict` 会检查已验证的 Codex/cc-connect 版本、OpenCode、服务状态以及
+默认通知路由和 ACP 路由。OpenCode 服务默认使用稳定的 `$HOME` 工作目录；如果
+需要指定项目目录，安装前设置：
+
+```bash
+export AGENT_NOTIFIER_OPENCODE_WORK_DIR=/path/to/project
+```
+
+远程机器需要在用户退出 SSH 后继续运行时，额外启用 user service linger：
+
+```bash
+loginctl enable-linger "$USER"
 ```
 
 安装器优先使用 `uv` 创建隔离环境；没有 `uv` 时使用标准 `python3 -m venv`，

@@ -7,6 +7,7 @@ from agent_notifier.config import (
     Paths,
     initialize_user_config,
 )
+from agent_notifier.setup import configure_routes
 
 
 def make_paths(root: Path) -> Paths:
@@ -91,6 +92,19 @@ class NotifierConfigTest(unittest.TestCase):
 
             self.assertFalse(second.created)
             self.assertEqual("[progress]\nonit = false\n", second.path.read_text())
+
+    def test_setup_writes_secret_free_routes_and_is_repeatable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            initialize_user_config(paths)
+            configure_routes(paths, "le-wm-codex", "oc_group_a", "oc_group_b")
+            configure_routes(paths, "le-wm-codex", "oc_group_a2", "oc_group_b2")
+            text = paths.config_file.read_text()
+
+        self.assertIn('oc_group_a2 = "opencode"', text)
+        self.assertIn('receive_id = "oc_group_b2"', text)
+        self.assertNotIn('oc_group_a = "opencode"', text)
+        self.assertNotIn("secret", text.lower())
 
 
 if __name__ == "__main__":
