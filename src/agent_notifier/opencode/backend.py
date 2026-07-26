@@ -175,10 +175,6 @@ class OpencodeBackend:
                     )
                     raise RuntimeError(error)
         finally:
-            try:
-                acp_flag.unlink()
-            except Exception:
-                pass
             self._subscribers[session_id].remove(queue)
             if not self._subscribers[session_id]:
                 del self._subscribers[session_id]

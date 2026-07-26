@@ -18,7 +18,7 @@ class OpencodeClient:
         self._events: asyncio.Queue = asyncio.Queue()
 
     async def connect(self) -> None:
-        self._session = ClientSession(timeout=ClientTimeout(total=30))
+        self._session = ClientSession(timeout=ClientTimeout(total=None, sock_read=300))
         await self._ping()
 
     async def _ping(self) -> None:

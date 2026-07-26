@@ -111,6 +111,9 @@ class ACPStdioServer:
                 }
             )
         except Exception as exc:
+            import traceback
+            with open("/tmp/acp-error.log", "a") as f:
+                traceback.print_exc(file=f)
             await self.write(
                 {
                     "jsonrpc": "2.0",

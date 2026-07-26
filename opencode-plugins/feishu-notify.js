@@ -124,9 +124,13 @@ export const FeishuNotify = async ({ $, client, directory }) => {
 
       if (type === "session.idle") {
         const sid = event?.properties?.sessionID || ""
-        if (!require("fs").existsSync(`/tmp/oc-acp-active-${sid}`)) {
-          await sendCompletionNotification($, client, event, directory)
+        const acpFlag = `/tmp/oc-acp-active-${sid}`
+        const fs = require("fs")
+        if (fs.existsSync(acpFlag)) {
+          try { fs.unlinkSync(acpFlag) } catch {}
+          return
         }
+        await sendCompletionNotification($, client, event, directory)
         return
       }
 
