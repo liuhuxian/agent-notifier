@@ -85,6 +85,11 @@ class NotificationRoute:
 @dataclass(frozen=True)
 class NotifierConfig:
     progress: ProgressConfig = ProgressConfig()
+    # Agent-scoped fallback targets.  A persisted thread route takes
+    # precedence; these names only resolve new/unbound sessions.
+    agent_routes: dict[str, str] = field(
+        default_factory=lambda: {"codex": "default", "opencode": "acp"}
+    )
     notification_routes: dict[str, NotificationRoute] = field(
         default_factory=dict
     )
@@ -101,6 +106,17 @@ class NotifierConfig:
         raw_routes = values.get("notification_routes") or {}
         if not isinstance(raw_routes, dict):
             raise ValueError("[notification_routes] must be a TOML table")
+        raw_agent_routes = values.get("agent_routes") or {}
+        if not isinstance(raw_agent_routes, dict):
+            raise ValueError("[agent_routes] must be a TOML table")
+        agent_routes = {
+            str(agent): str(route).strip()
+            for agent, route in raw_agent_routes.items()
+        }
+        agent_routes = {
+            "codex": agent_routes.get("codex", "default"),
+            "opencode": agent_routes.get("opencode", "acp"),
+        }
         routes = {}
         for name, route_values in raw_routes.items():
             if not isinstance(route_values, dict):
@@ -112,6 +128,7 @@ class NotifierConfig:
             )
         return cls(
             progress=ProgressConfig.from_mapping(progress),
+            agent_routes=agent_routes,
             notification_routes=routes,
         )
 

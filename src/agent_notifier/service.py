@@ -22,6 +22,7 @@ from .feishu import (
     send_text_message,
 )
 from .native_hooks import format_result
+from .notification_routing import resolve_thread_route_name
 from .proxy import AppServerProxy, approval_short_id
 from .registry import SessionRegistry
 
@@ -131,6 +132,7 @@ class SharedService:
                         on_approval_request=self._notify_approval_request,
                         on_terminal_approval=self._notify_terminal_approval,
                         on_token_usage=self._record_token_usage,
+                        on_thread_started=self._register_terminal_thread,
                     )
                     await self.proxy.start()
                     backoff = 1.0
@@ -187,7 +189,48 @@ class SharedService:
             f"**目录**：{mapping.cwd}\n"
             f"**结果**：\n\n{result}"
         )
-        await self._send_to_notification_route("default", message)
+        route_name = self._thread_route_name(thread_id, mapping, fallback="default")
+        await self._send_to_notification_route(route_name, message)
+
+    async def _register_terminal_thread(
+        self, thread_id: str, cwd: str, _origin: str
+    ) -> None:
+        """Persist the configured Codex route for a newly created TUI thread."""
+        if self.registry is None:
+            return
+        if self.registry.get_thread_route(thread_id) is not None:
+            return
+        route_name = self.config.agent_routes.get("codex", "default")
+        route = self.config.notification_routes.get(route_name)
+        if route is None:
+            logger.warning(
+                "new terminal thread has no configured Codex route: thread=%s route=%s",
+                thread_id,
+                route_name,
+            )
+            return
+        thread_cwd = cwd or os.getcwd()
+        external_key = f"feishu:{route.receive_id}:terminal:{thread_id}"
+        mapping = self.registry.subscribe(
+            "cc_connect",
+            route.project,
+            external_key,
+            thread_id,
+            thread_cwd,
+        )
+        self.registry.set_thread_route(
+            thread_id,
+            "codex",
+            route_name,
+            mapping.project,
+            mapping.external_key,
+            mapping.cwd,
+        )
+        logger.info(
+            "registered new terminal Codex thread route: thread=%s route=%s",
+            thread_id,
+            route_name,
+        )
 
     async def _notify_interrupted_turns(
         self,
@@ -214,7 +257,12 @@ class SharedService:
                 f"App Server 退出码：{returncode}\n"
                 "Agent Notifier 将自动重启服务；请确认任务状态后重试。"
             )
-            if origin == "terminal":
+            route_name = self._thread_route_name(
+                thread_id, mapping, fallback=None
+            )
+            if route_name:
+                await self._send_to_notification_route(route_name, message)
+            elif origin == "terminal":
                 await self._send_to_notification_route("default", message)
             else:
                 await self._send_to_mapping(mapping, message)
@@ -232,8 +280,37 @@ class SharedService:
                 "no Feishu route for remote progress: thread=%s", thread_id
             )
             return
-        if not self.config.progress.moving_onit:
-            await self._send_to_mapping(mapping, text.strip())
+        route_name = self._thread_route_name(thread_id, mapping, fallback=None)
+        route = self.config.notification_routes.get(route_name) if route_name else None
+        if route is not None and self.config.progress.moving_onit:
+            try:
+                message_id, reaction_id = await send_progress_message_with_onit(
+                    project=route.project,
+                    receive_id=route.receive_id,
+                    text=text.strip(),
+                )
+            except Exception:
+                logger.exception(
+                    "session route progress send failed; falling back: thread=%s",
+                    thread_id,
+                )
+                await self._send_to_notification_route(route_name, text.strip())
+                return
+            previous = self._remote_progress_onit.get(thread_id)
+            self._remote_progress_onit[thread_id] = (
+                route.project, message_id, reaction_id
+            )
+            if previous:
+                try:
+                    await self._remove_remote_progress_reaction(previous)
+                except Exception:
+                    logger.exception(
+                        "failed to remove previous progress reaction: thread=%s",
+                        thread_id,
+                    )
+            return
+        if route is not None:
+            await self._send_to_notification_route(route_name, text.strip())
             return
         receive_id = mapping.external_key.rsplit(":", 1)[-1]
         try:
@@ -327,8 +404,15 @@ class SharedService:
         receive_id_type = "open_id"
         receive_id = mapping.external_key.rsplit(":", 1)[-1]
         target_project = mapping.project
-        if origin == "terminal":
-            route = self._notification_route("default")
+        route_name = self._thread_route_name(thread_id, mapping, fallback=None)
+        route = (
+            self.config.notification_routes.get(route_name)
+            if route_name else None
+        )
+        if route is None and origin == "terminal":
+            route_name = "default"
+            route = self.config.notification_routes.get(route_name)
+        if route is not None:
             target_project = route.project
             receive_id = route.receive_id
             receive_id_type = route.receive_id_type
@@ -337,7 +421,11 @@ class SharedService:
                 project=target_project,
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
-                session_key=target_mapping.external_key,
+                session_key=(
+                    route.session_key or target_mapping.external_key
+                    if route
+                    else target_mapping.external_key
+                ),
                 approval_id=request_id,
                 reason=reason,
                 operation=operation,
@@ -352,9 +440,9 @@ class SharedService:
                 "Feishu approval card failed; falling back to text: approval=%s",
                 request_id,
             )
-            if origin == "terminal":
+            if route is not None:
                 await self._send_to_notification_route(
-                    "default", format_approval_message(token, request)
+                    route_name, format_approval_message(token, request)
                 )
             else:
                 await self._send_to_mapping(
@@ -372,8 +460,13 @@ class SharedService:
         if mapping is None:
             return
         reason, operation = approval_details(record.payload)
+        route_name = self._thread_route_name(record.thread_id, mapping, fallback=None)
+        route = (
+            self.config.notification_routes.get(route_name)
+            if route_name else None
+        )
         await reply_approval_result_card(
-            project=mapping.project,
+            project=route.project if route else mapping.project,
             message_id=record.feishu_message_id,
             approval_id=approval_short_id(token),
             decision=decision,
@@ -392,6 +485,11 @@ class SharedService:
                 f"notification route {name!r} is not configured"
             )
         return route
+
+    def _thread_route_name(self, thread_id: str, mapping, *, fallback: str | None):
+        return resolve_thread_route_name(
+            self.config, self.registry, thread_id, mapping, fallback=fallback
+        )
 
     async def _send_to_notification_route(
         self, name: str, message: str

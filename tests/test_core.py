@@ -11,11 +11,12 @@ from agent_notifier.versioning import CompatibilityError, require_supported_vers
 class VersioningTest(unittest.TestCase):
     def test_supported_versions_are_accepted(self):
         require_supported_version("codex", "0.145.0")
+        require_supported_version("codex", "0.146.0")
         require_supported_version("cc-connect", "1.3.2")
 
     def test_unknown_versions_are_rejected(self):
         with self.assertRaises(CompatibilityError):
-            require_supported_version("codex", "0.146.0")
+            require_supported_version("codex", "0.144.9")
 
 
 class PolicyTest(unittest.TestCase):

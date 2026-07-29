@@ -379,6 +379,31 @@ class ProxyIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("thread/read", response["result"]["method"])
         await ws.close()
 
+    async def test_new_terminal_thread_invokes_route_registration_callback(self):
+        registrations = []
+
+        async def register(thread_id, cwd, origin):
+            registrations.append((thread_id, cwd, origin))
+
+        self.proxy.on_thread_started = register
+        await self.proxy._observe_thread_started(
+            "thread/start",
+            {"cwd": "/workspace/le-wm"},
+            {"result": {"thread": {"id": "thread-new"}}},
+            "terminal",
+        )
+        await self.proxy._observe_thread_started(
+            "thread/start",
+            {"cwd": "/ignored"},
+            {"result": {"thread": {"id": "thread-remote"}}},
+            "cc_connect",
+        )
+
+        self.assertEqual(
+            [("thread-new", "/workspace/le-wm", "terminal")],
+            registrations,
+        )
+
     async def test_native_tui_rpc_path_preserves_request(self):
         ws = await self.session.ws_connect("http://localhost/rpc")
         await ws.send_json({"jsonrpc": "2.0", "id": 8, "method": "thread/read", "params": {}})

@@ -18,6 +18,12 @@ moving_onit = true
 # Report an active turn that ends because the App Server stops unexpectedly.
 notify_interruption = true
 
+# Session-scoped fallback targets.  Change these route names to the routes
+# that point to the Codex P2P chat and the OpenCode interactive group.
+# [agent_routes]
+# codex = "codex_p2p"
+# opencode = "opencode_group"
+
 # Optional explicit outbound notification targets. Interactive chats remain
 # under [chat_routes]; this route is for terminal and pipeline notifications.
 #
@@ -27,6 +33,19 @@ notify_interruption = true
 # receive_id = "oc_your_notification_group_chat_id"
 # message_format = "markdown" # or "text"
 # session_key = "feishu:oc_your_notification_group_chat_id:terminal:ses_your_session_id"
+#
+# [notification_routes.codex_p2p]
+# project = "le-wm-codex"
+# receive_id_type = "open_id"
+# receive_id = "ou_your_codex_p2p_open_id"
+# message_format = "markdown"
+#
+# [notification_routes.opencode_group]
+# project = "le-wm-opencode"
+# receive_id_type = "chat_id"
+# receive_id = "oc_your_opencode_group_chat_id"
+# message_format = "markdown"
+# session_key = "feishu:oc_your_opencode_group_chat_id:terminal:ses_your_session_id"
 #
 # [notification_routes.acp]
 # project = "le-wm-codex"

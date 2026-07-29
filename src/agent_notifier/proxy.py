@@ -254,6 +254,9 @@ class AppServerProxy:
         ) = None,
         on_token_usage: Callable[[str, dict], Awaitable[None]] | None = None,
         on_terminal_approval: Callable[[str, str], Awaitable[None]] | None = None,
+        on_thread_started: (
+            Callable[[str, str, str], Awaitable[None]] | None
+        ) = None,
     ):
         self.listen_socket = Path(listen_socket)
         self.upstream_socket = Path(upstream_socket)
@@ -267,6 +270,7 @@ class AppServerProxy:
         self.on_remote_progress = on_remote_progress
         self.on_approval_request = on_approval_request
         self.on_token_usage = on_token_usage
+        self.on_thread_started = on_thread_started
         self._thread_origins: dict[str, str] = {}
         self._turn_text: dict[tuple[str, str], list[str]] = {}
         self._turn_last_message: dict[tuple[str, str], str] = {}
@@ -323,6 +327,7 @@ class AppServerProxy:
                 "http://localhost/", heartbeat=30, max_msg_size=0
             )
             pending_request_methods: dict[object, str] = {}
+            pending_request_params: dict[object, dict] = {}
 
             async def downstream_to_upstream() -> None:
                 message_type = None
@@ -349,6 +354,9 @@ class AppServerProxy:
                         )
                         if "id" in payload and payload.get("method"):
                             pending_request_methods[payload["id"]] = payload["method"]
+                            pending_request_params[payload["id"]] = (
+                                payload.get("params") or {}
+                            )
                         if payload.get("method") in {"turn/start", "turn/steer"}:
                             thread_id = (payload.get("params") or {}).get("threadId")
                             if thread_id:
@@ -380,8 +388,17 @@ class AppServerProxy:
                             request_method = pending_request_methods.pop(
                                 payload["id"], None
                             )
+                            request_params = pending_request_params.pop(
+                                payload["id"], {}
+                            )
                             await self.event_hub.subscribe_from_response(
                                 client_id, request_method, payload
+                            )
+                            await self._observe_thread_started(
+                                request_method,
+                                request_params,
+                                payload,
+                                client_kind,
                             )
                         if payload.get("method") in APPROVAL_METHODS and "id" in payload:
                             if not await self.event_hub.is_authoritative_source(
@@ -449,6 +466,31 @@ class AppServerProxy:
             await session.close()
             await downstream.close()
         return downstream
+
+    async def _observe_thread_started(
+        self,
+        request_method: str | None,
+        request_params: dict,
+        response: dict,
+        client_kind: str,
+    ) -> None:
+        """Register new terminal threads before their first turn can notify."""
+        if request_method != "thread/start" or client_kind != "terminal":
+            return
+        thread = (response.get("result") or {}).get("thread") or {}
+        thread_id = str(thread.get("id") or "")
+        if not thread_id or self.on_thread_started is None:
+            return
+        cwd = str(
+            thread.get("cwd")
+            or request_params.get("cwd")
+            or request_params.get("workingDirectory")
+            or ""
+        )
+        try:
+            await self.on_thread_started(thread_id, cwd, client_kind)
+        except Exception:
+            logger.exception("failed to register new terminal thread: %s", thread_id)
 
     async def _observe_notification(self, payload: dict) -> None:
         method = payload.get("method")

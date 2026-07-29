@@ -75,6 +75,33 @@ class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):
             service.registry.close()
             service.approval_store.close()
 
+    async def test_new_terminal_thread_uses_configured_codex_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            paths.config_file.write_text(
+                "[agent_routes]\n"
+                'codex = "codex_p2p"\n\n'
+                "[notification_routes.codex_p2p]\n"
+                'project = "le-wm-codex"\n'
+                'receive_id_type = "open_id"\n'
+                'receive_id = "ou_codex"\n'
+            )
+            service = SharedService(paths)
+            service.registry = SessionRegistry(paths.state_db)
+
+            await service._register_terminal_thread(
+                "thread-new", "/workspace/le-wm", "terminal"
+            )
+
+            mapping = service.registry.find_by_thread("thread-new")
+            route = service.registry.get_thread_route("thread-new")
+            self.assertEqual("le-wm-codex", mapping.project)
+            self.assertEqual("/workspace/le-wm", mapping.cwd)
+            self.assertEqual("codex", route.agent)
+            self.assertEqual("codex_p2p", route.route_name)
+            service.registry.close()
+
     async def test_terminal_approval_is_sent_to_notification_chat(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = make_paths(Path(tmp))

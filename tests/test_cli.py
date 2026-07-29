@@ -21,6 +21,7 @@ from agent_notifier.cli import (
     list_agent_sessions,
     reply_approval_decision,
     send_configured_notification,
+    send_opencode_notification,
     switch_agent_session,
 )
 from agent_notifier.config import Paths
@@ -95,6 +96,18 @@ class CodexBindingTest(unittest.TestCase):
         self.assertEqual("default", args.route)
         self.assertTrue(args.stdin)
 
+    def test_opencode_permission_uses_agent_route_when_unspecified(self):
+        args = build_parser().parse_args(
+            [
+                "opencode-permission",
+                "--session",
+                "ses-1",
+                "--perm",
+                "perm-1",
+            ]
+        )
+        self.assertIsNone(args.route)
+
     def test_setup_and_strict_doctor_parsers(self):
         setup = build_parser().parse_args(
             [
@@ -140,6 +153,39 @@ class CodexBindingTest(unittest.TestCase):
             receive_id="oc_notify",
             receive_id_type="chat_id",
             text="pipeline done",
+        )
+
+    def test_opencode_notification_uses_bound_session_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = make_paths(Path(tmp))
+            paths.ensure_directories()
+            paths.config_file.write_text(
+                "[notification_routes.default]\n"
+                'project = "le-wm"\nreceive_id = "oc_default"\n'
+                'message_format = "markdown"\n'
+                "[notification_routes.opencode_group]\n"
+                'project = "le-wm"\nreceive_id = "oc_group"\n'
+                'message_format = "markdown"\n'
+            )
+            registry = SessionRegistry(paths.state_db)
+            mapping = registry.bind(
+                "cc_connect", "le-wm", "feishu:oc_group:terminal:ses-target",
+                "ses-target", "/workspace",
+            )
+            registry.set_thread_route(
+                "ses-target", "opencode", "opencode_group",
+                mapping.project, mapping.external_key, mapping.cwd,
+            )
+            registry.close()
+            with patch(
+                "agent_notifier.cli.send_markdown_message",
+                new=AsyncMock(return_value="om_group"),
+            ) as send_message:
+                asyncio.run(send_opencode_notification(paths, "ses-target", "done"))
+
+        send_message.assert_awaited_once_with(
+            project="le-wm", receive_id="oc_group", receive_id_type="chat_id",
+            text="done",
         )
 
     def test_agent_help_lists_registered_user_commands(self):

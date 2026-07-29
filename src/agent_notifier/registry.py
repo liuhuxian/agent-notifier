@@ -33,6 +33,16 @@ class ActiveAgent:
     provider: str
 
 
+@dataclass(frozen=True)
+class ThreadRoute:
+    thread_id: str
+    agent: str
+    route_name: str
+    project: str
+    external_key: str
+    cwd: str
+
+
 class SessionRegistry:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +59,19 @@ class SessionRegistry:
                 cwd TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (adapter, project, external_key)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thread_routes (
+                thread_id TEXT PRIMARY KEY,
+                agent TEXT NOT NULL,
+                route_name TEXT NOT NULL,
+                project TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -177,6 +200,52 @@ class SessionRegistry:
                 (adapter, project, external_key),
             ).fetchone()
         return SessionMapping(*row) if row else None
+
+    def set_thread_route(
+        self,
+        thread_id: str,
+        agent: str,
+        route_name: str,
+        project: str,
+        external_key: str,
+        cwd: str,
+    ) -> ThreadRoute:
+        route = ThreadRoute(
+            str(thread_id), str(agent), str(route_name), str(project),
+            str(external_key), str(cwd),
+        )
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO thread_routes
+                    (thread_id, agent, route_name, project, external_key, cwd)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(thread_id) DO UPDATE SET
+                    agent = excluded.agent,
+                    route_name = excluded.route_name,
+                    project = excluded.project,
+                    external_key = excluded.external_key,
+                    cwd = excluded.cwd,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    route.thread_id, route.agent, route.route_name,
+                    route.project, route.external_key, route.cwd,
+                ),
+            )
+        return route
+
+    def get_thread_route(self, thread_id: str) -> ThreadRoute | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT thread_id, agent, route_name, project, external_key, cwd
+                FROM thread_routes
+                WHERE thread_id = ?
+                """,
+                (thread_id,),
+            ).fetchone()
+        return ThreadRoute(*row) if row else None
 
     def set_active_agent(
         self, project: str, external_key: str, provider: str

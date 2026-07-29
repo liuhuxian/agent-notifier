@@ -9,15 +9,16 @@ Agent Notifier 让终端中的原生 Coding Agent 与 cc-connect/飞书共享同
 
 | 组件 | 状态 | 已验证版本 |
 |---|---|---|
-| Codex CLI | 支持 | **0.145.0** |
+| Codex CLI | 支持 | **>= 0.145.0** |
 | cc-connect | 支持 | **1.3.2**，commit `19406df9` |
 | Python | 支持 | 3.10+ |
 | Linux systemd user service | 支持 | 当前主路径 |
 | OpenCode | 支持 | 当前插件/API 组合，安装时检测 |
 
 完整 multi 后端依赖 Codex App Server、OpenCode 和 cc-connect ACP 协议。这些协议仍在
-演进，因此 Codex/cc-connect 默认拒绝未经验证的版本；OpenCode 当前做存在性和
-`--version` 检查，具体 API 兼容性仍需通过冒烟测试确认。升级任一组件后，先运行：
+演进，因此 Codex 要求不低于最小兼容版本，cc-connect 默认拒绝未经验证的版本；
+OpenCode 当前做存在性和 `--version` 检查，具体 API 兼容性仍需通过冒烟测试确认。
+升级任一组件后，先运行：
 
 ```bash
 agent-notifier doctor
@@ -93,6 +94,7 @@ agent-notifier setup
 - 交互群（Group A）chat ID
 - 通知群（Group B）chat ID
 - `[chat_routes]` 和 `notification_routes`
+- 可选的 `[agent_routes]`：将 Codex 和 OpenCode 会话分别绑定到通知目标
 
 如果需要脚本化部署，可以显式传参：
 
@@ -184,14 +186,43 @@ receive_id_type = "chat_id"
 receive_id = "oc_YOUR_GROUP_A_CHAT_ID"
 message_format = "markdown"
 session_key = "feishu:oc_YOUR_GROUP_A_CHAT_ID:terminal:<session_id>"
+
+# 会话级通知目标：Codex 使用 P2P，OpenCode 使用群 A。
+# 群 B 仍保留给 pipeline/default 通知。
+[agent_routes]
+codex = "codex_p2p"
+opencode = "opencode_group"
+
+[notification_routes.codex_p2p]
+project = "le-wm-codex"
+receive_id_type = "open_id"
+receive_id = "ou_YOUR_CODEX_P2P_OPEN_ID"
+message_format = "markdown"
+
+[notification_routes.opencode_group]
+project = "le-wm-opencode"
+receive_id_type = "chat_id"
+receive_id = "oc_YOUR_GROUP_A_CHAT_ID"
+message_format = "markdown"
+session_key = "feishu:oc_YOUR_GROUP_A_CHAT_ID:terminal:<session_id>"
 ```
 
 在每个群聊中发送 `/whoami` 获取 chat_id。然后将本地 opencode session 注册到 cc connect 进行卡片识别：
 
 ```bash
-agent-notifier bind-terminal --thread-id <session_id> --route default
-agent-notifier bind-terminal --thread-id <session_id> --route acp
+agent-notifier bind-terminal --thread-id <session_id> --route opencode_group
 ```
+
+已有终端 Codex 会话需要重新绑定一次，才能迁移到 P2P：
+
+```bash
+agent-notifier codex --notify-route codex_p2p resume <CODEX_THREAD_ID>
+```
+
+绑定后，完成、异常、权限审批和进度通知都按 thread ID 的绑定发送，
+不再根据“终端还是飞书发起”决定目标。新建的终端 Codex 会话会在
+`thread/start` 成功后自动登记到 `agent_routes.codex`；未绑定的旧会话继续
+使用原有回退逻辑。
 
 运行状态不会写回 Git 仓库：
 
@@ -221,8 +252,8 @@ systemd 默认 `PATH` 中的安装方式。Codex 路径变更后重新运行 `./
 ```text
 原生 Codex Stop
     -> agent-notifier native-hook stop
-    -> agent-notifier notify --route default
-    -> 配置的通知群（默认 Group B）
+    -> 根据 thread ID 查找 agent route
+    -> Codex P2P；未绑定时回退 default/Group B
 ```
 
 安装时会先备份已有 `~/.codex/hooks.json`。如果需要手动重新配置完成 hook，运行：

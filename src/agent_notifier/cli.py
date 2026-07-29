@@ -33,6 +33,7 @@ from .hook_config import (
     native_stop_hook as build_native_stop_hook_config,
 )
 from .native_hooks import build_completion_message, claim
+from .notification_routing import agent_route_name, resolve_thread_route_name
 from .registry import SessionRegistry
 from .service import SharedService, approval_details
 from .setup import run_setup
@@ -79,6 +80,22 @@ async def send_configured_notification(
     )
 
 
+async def send_opencode_notification(
+    paths: Paths, session_id: str, text: str
+) -> str:
+    """Send an OpenCode notification using its persisted session route."""
+    config = NotifierConfig.load(paths.config_file)
+    registry = SessionRegistry(paths.state_db)
+    try:
+        mapping = registry.find_by_thread(session_id)
+        route_name = resolve_thread_route_name(
+            config, registry, session_id, mapping, fallback="default"
+        ) or "default"
+    finally:
+        registry.close()
+    return await send_configured_notification(paths, route_name, text)
+
+
 def send_opencode_tool_event(paths: Paths, payload_text: str) -> None:
     """Forward one OpenCode tool lifecycle event to the active ACP bridge."""
     payload = json.loads(payload_text)
@@ -93,9 +110,10 @@ def send_opencode_tool_event(paths: Paths, payload_text: str) -> None:
 
 
 def bind_opencode_terminal(
-    paths: Paths, thread_id: str, route_name: str = "default"
+    paths: Paths, thread_id: str, route_name: str | None = None
 ) -> SessionMapping:
     config = NotifierConfig.load(paths.config_file)
+    route_name = agent_route_name(config, "opencode", route_name)
     route = config.notification_routes.get(route_name)
     if route is None:
         raise ValueError(f"notification route {route_name!r} is not configured")
@@ -105,13 +123,18 @@ def bind_opencode_terminal(
         )
     registry = SessionRegistry(paths.state_db)
     try:
-        return registry.bind(
+        mapping = registry.bind(
             "cc_connect",
             route.project,
             route.session_key,
             thread_id,
             os.getcwd(),
         )
+        registry.set_thread_route(
+            thread_id, "opencode", route_name, mapping.project,
+            mapping.external_key, mapping.cwd,
+        )
+        return mapping
     finally:
         registry.close()
 
@@ -123,10 +146,22 @@ async def opencode_permission(
     perm_type: str,
     filepath: str,
     pattern: str = "",
-    route_name: str = "default",
+    route_name: str | None = None,
 ) -> str:
     config = NotifierConfig.load(paths.config_file)
-    route = config.notification_routes.get(route_name)
+    registry = SessionRegistry(paths.state_db)
+    try:
+        mapping = registry.find_by_thread(session_id)
+        resolved_route = resolve_thread_route_name(
+            config,
+            registry,
+            session_id,
+            mapping,
+            fallback=route_name or "default",
+        )
+    finally:
+        registry.close()
+    route = config.notification_routes.get(resolved_route or route_name)
     if route is None:
         raise ValueError(f"notification route {route_name!r} is not configured")
     message_id = await send_opencode_approval_card(
@@ -207,7 +242,27 @@ def native_stop_hook(paths: Paths, payload_text: str) -> int:
     message, dedupe_key = result
     if not claim(paths.state_dir / "native_hook_seen", dedupe_key):
         return 0
-    asyncio.run(send_configured_notification(paths, "default", message))
+    config = NotifierConfig.load(paths.config_file)
+    registry = SessionRegistry(paths.state_db)
+    try:
+        thread_id = (
+            payload.get("thread-id")
+            or payload.get("thread_id")
+            or payload.get("threadId")
+            or payload.get("session_id")
+            or payload.get("sessionId")
+        )
+        mapping = registry.find_by_thread(str(thread_id)) if thread_id else None
+        route_name = resolve_thread_route_name(
+            config,
+            registry,
+            str(thread_id) if thread_id else None,
+            mapping,
+            fallback="default",
+        ) or "default"
+    finally:
+        registry.close()
+    asyncio.run(send_configured_notification(paths, route_name, message))
     return 0
 
 
@@ -216,11 +271,12 @@ def bind_terminal_thread(
     thread_id: str,
     project: str | None = None,
     cwd: str | None = None,
-    notification_route: str = "default",
+    notification_route: str | None = None,
 ):
     registry = SessionRegistry(paths.state_db)
     try:
         config = NotifierConfig.load(paths.config_file)
+        notification_route = agent_route_name(config, "codex", notification_route)
         configured = config.notification_routes.get(notification_route)
         if configured and (project is None or project == configured.project):
             # A notification route is intentionally allowed to have no
@@ -229,13 +285,18 @@ def bind_terminal_thread(
             external_key = (
                 f"feishu:{configured.receive_id}:terminal:{thread_id}"
             )
-            return registry.subscribe(
+            mapping = registry.subscribe(
                 "cc_connect",
                 configured.project,
                 external_key,
                 thread_id,
                 cwd or os.getcwd(),
             )
+            registry.set_thread_route(
+                thread_id, "codex", notification_route, mapping.project,
+                mapping.external_key, mapping.cwd,
+            )
+            return mapping
         routes = registry.list_routes("cc_connect", project)
         scope = f"project {project!r}" if project else "all configured projects"
         if not routes:
@@ -247,13 +308,18 @@ def bind_terminal_thread(
                 f"(projects: {projects}); specify --notify-project"
             )
         route = routes[0]
-        return registry.subscribe(
+        mapping = registry.subscribe(
             route.adapter,
             route.project,
             route.external_key,
             thread_id,
             cwd or route.cwd,
         )
+        registry.set_thread_route(
+            thread_id, "codex", notification_route, mapping.project,
+            mapping.external_key, mapping.cwd,
+        )
+        return mapping
     finally:
         registry.close()
 
@@ -922,8 +988,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     codex.add_argument(
         "--notify-route",
-        default="default",
-        help="configured outbound notification route (default: default)",
+        default=None,
+        help="configured outbound notification route (default: agent_routes.codex)",
     )
     codex.add_argument("codex_args", nargs=argparse.REMAINDER)
     bind = sub.add_parser(
@@ -936,7 +1002,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="register an opencode terminal session for cc-connect card recognition",
     )
     bind_terminal.add_argument("--thread-id", required=True)
-    bind_terminal.add_argument("--route", default="default")
+    bind_terminal.add_argument("--route", default=None)
     activate = sub.add_parser(
         "activate", help="select a subscribed Codex thread for incoming chat tasks"
     )
@@ -988,6 +1054,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read the notification body from stdin",
     )
+    opencode_notify = sub.add_parser(
+        "opencode-notify",
+        help="send a notification using an OpenCode session's configured route",
+    )
+    opencode_notify.add_argument("--session", required=True)
+    opencode_notify.add_argument("-m", "--message")
+    opencode_notify.add_argument("--stdin", action="store_true")
     tool_event = sub.add_parser(
         "opencode-tool-event", help="forward an OpenCode tool lifecycle event"
     )
@@ -1003,7 +1076,11 @@ def build_parser() -> argparse.ArgumentParser:
     oc_perm.add_argument("--type", default="unknown")
     oc_perm.add_argument("--path", default="")
     oc_perm.add_argument("--pattern", default="")
-    oc_perm.add_argument("--route", default="default")
+    oc_perm.add_argument(
+        "--route",
+        default=None,
+        help="configured outbound notification route (default: agent_routes.opencode)",
+    )
     oc_decide = sub.add_parser(
         "opencode-decide", help="respond to an opencode permission request"
     )
@@ -1206,6 +1283,19 @@ def main() -> None:
                 send_configured_notification(
                     paths, args.route, text
                 )
+            )
+            print(f"sent: {message_id}")
+        elif args.command == "opencode-notify":
+            if args.message is not None:
+                text = args.message
+            elif args.stdin:
+                text = sys.stdin.read()
+            else:
+                raise ValueError(
+                    "opencode-notify requires -m <message> or --stdin"
+                )
+            message_id = asyncio.run(
+                send_opencode_notification(paths, args.session, text)
             )
             print(f"sent: {message_id}")
         elif args.command == "opencode-tool-event":
