@@ -18,7 +18,10 @@ class OpencodeClient:
         self._events: asyncio.Queue = asyncio.Queue()
 
     async def connect(self) -> None:
-        self._session = ClientSession(timeout=ClientTimeout(total=None, sock_read=300))
+        # OpenCode may legitimately stay silent while a tool or model call is
+        # running.  An idle read timeout would turn that silence into a false
+        # transport failure and lose the eventual completion notification.
+        self._session = ClientSession(timeout=ClientTimeout(total=None, sock_read=None))
         await self._ping()
 
     async def _ping(self) -> None:
@@ -38,7 +41,7 @@ class OpencodeClient:
             async with self._session.get(
                 f"{self.base_url}/event",
                 headers={"Accept": "text/event-stream"},
-                timeout=ClientTimeout(total=None, sock_read=300),
+                timeout=ClientTimeout(total=None, sock_read=None),
             ) as resp:
                 buf = ""
                 async for chunk in resp.content.iter_any():

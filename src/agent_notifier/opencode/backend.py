@@ -180,12 +180,24 @@ class OpencodeBackend:
         part_types: dict[str, str] = {}
         assistant_msg_ids: set[str] = set()
         acp_flag = Path(f"/tmp/oc-acp-active-{session_id}")
+        heartbeat_task: asyncio.Task | None = None
+
+        async def heartbeat() -> None:
+            interval = self.progress.heartbeat_interval_ms / 1000.0
+            while True:
+                await asyncio.sleep(interval)
+                # This is deliberately a thought/status event rather than
+                # model text.  It keeps the ACP socket active during long
+                # silent tool calls without polluting the final response.
+                await emit({"kind": "status", "text": "仍在执行"})
+
         try:
             self._active_emitters[session_id] = emit
             acp_flag.write_text("1")
             await self._client.send_prompt(session_id, text)
             if self.progress.progress_card:
                 await emit({"kind": "status", "text": "正在思考"})
+            heartbeat_task = asyncio.create_task(heartbeat())
 
             while True:
                 event = await queue.get()
@@ -243,6 +255,9 @@ class OpencodeBackend:
                     )
                     raise RuntimeError(error)
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
             self._active_emitters.pop(session_id, None)
             self._subscribers[session_id].remove(queue)
             if not self._subscribers[session_id]:

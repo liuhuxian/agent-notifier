@@ -18,6 +18,10 @@ moving_onit = true
 # Report an active turn that ends because the App Server stops unexpectedly.
 notify_interruption = true
 
+# Keep long-running OpenCode turns alive across ACP/socket idle timeouts.
+# This is an internal thought update and is not model output.
+heartbeat_interval_ms = 15000
+
 # Session-scoped fallback targets.  Change these route names to the routes
 # that point to the Codex P2P chat and the OpenCode interactive group.
 # [agent_routes]

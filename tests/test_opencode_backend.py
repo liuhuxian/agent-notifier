@@ -173,6 +173,33 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("end_turn", result.get("stopReason"))
         self.assertIn(("ses_test_prompt", "hello"), self.client.prompts)
 
+    async def test_prompt_emits_heartbeat_during_silent_turn(self):
+        session_id = "ses_test_heartbeat"
+        emit_calls = []
+        self.backend.progress = ProgressConfig(
+            stream_preview=True, heartbeat_interval_ms=1000
+        )
+
+        async def emit(event):
+            emit_calls.append(event)
+
+        task = asyncio.create_task(
+            self.backend.prompt(session_id, "long task", "cc_connect", emit)
+        )
+        await asyncio.sleep(1.1)
+        await self.client.events.put({
+            "type": "session.idle",
+            "properties": {"sessionID": session_id},
+        })
+        await asyncio.wait_for(task, timeout=2)
+        self.assertTrue(
+            any(
+                event.get("kind") == "status"
+                and event.get("text") == "仍在执行"
+                for event in emit_calls
+            )
+        )
+
     async def test_prompt_streams_delta(self):
         session_id = "ses_test_delta"
         emit_calls = []

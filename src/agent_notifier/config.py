@@ -22,6 +22,7 @@ class ProgressConfig:
     stream_update_interval_ms: int = 2000
     moving_onit: bool = True
     notify_interruption: bool = True
+    heartbeat_interval_ms: int = 15000
 
     @classmethod
     def from_mapping(cls, values: dict[str, Any]) -> "ProgressConfig":
@@ -36,9 +37,14 @@ class ProgressConfig:
             notify_interruption=bool(
                 values.get("notify_interruption", True)
             ),
+            heartbeat_interval_ms=int(
+                values.get("heartbeat_interval_ms", 15000)
+            ),
         )
         if config.stream_update_interval_ms < 250:
             raise ValueError("stream_update_interval_ms must be >= 250")
+        if config.heartbeat_interval_ms < 1000:
+            raise ValueError("heartbeat_interval_ms must be >= 1000")
         return config
 
 
