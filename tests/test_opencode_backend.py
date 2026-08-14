@@ -321,6 +321,7 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
                 "sessionID": session_id,
                 "permission": "write",
                 "metadata": {"filepath": "/tmp/test.txt"},
+                "always": ["/tmp/test.txt"],
             },
         })
         await self.client.events.put({
@@ -329,6 +330,17 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
         })
         await asyncio.wait_for(task, timeout=2)
         self.assertEqual("end_turn", task.result().get("stopReason"))
+        self.assertEqual(
+            [(session_id, "perm_001", "once")],
+            self.client.permission_replies,
+        )
+        self.assertEqual(
+            {"allow_once", "allow_always", "deny_once"},
+            {
+                option["optionId"]
+                for option in self.permission_calls[0]["options"]
+            },
+        )
 
     async def test_prompt_raises_on_error(self):
         session_id = "ses_test_error"

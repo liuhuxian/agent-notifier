@@ -8,6 +8,7 @@ from agent_notifier.feishu import (
     build_approval_card,
     build_approval_result_card,
     build_markdown_card_v2,
+    build_opencode_approval_card,
     load_feishu_settings,
     send_progress_message_with_onit,
     send_markdown_message,
@@ -16,6 +17,26 @@ from agent_notifier.feishu import (
 
 
 class FeishuCardTest(unittest.TestCase):
+    def test_opencode_card_renders_dynamic_choices(self):
+        options = [
+            {"option_id": "once", "label": "允许一次"},
+            {"option_id": "always", "label": "始终允许"},
+            {"option_id": "reject", "label": "拒绝"},
+        ]
+        card = build_opencode_approval_card(
+            "perm-123", "write", "/tmp/a", options=options
+        )
+        self.assertEqual("2.0", card["schema"])
+        buttons = card["body"]["elements"][-1]["columns"]
+        self.assertEqual(3, len(buttons))
+        actions = [
+            col["elements"][0]["behaviors"][0]["value"]["action"]
+            for col in buttons
+        ]
+        self.assertEqual("cmd:/opencode-approve perm-123", actions[0])
+        self.assertEqual("cmd:/opencode-select perm-123 always", actions[1])
+        self.assertEqual("cmd:/opencode-deny perm-123", actions[2])
+
     def test_buttons_execute_real_approval_commands_without_replacing_card(self):
         card = build_approval_card(
             approval_id="1234567890",

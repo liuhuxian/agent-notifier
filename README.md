@@ -164,7 +164,16 @@ CI、容器或不希望立即安装服务时：
 [[commands]]
   name = "opencode-deny"
   exec = "sh -c 'echo reject > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} deny >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+
+[[commands]]
+  name = "opencode-select"
+  description = "Select an OpenCode permission choice"
+  exec = "sh -c 'echo {{2}} > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} {{2}} >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
 ```
+
+`opencode-select` 的第二个参数是 OpenCode 返回的选择值（例如
+`always`）。默认的“允许一次”和“拒绝”按钮仍兼容原有的
+`opencode-approve` / `opencode-deny` 命令。
 
 **2. 在 `~/.config/agent-notifier/config.toml` 中配置聊天路由和通知目标：**
 
@@ -318,6 +327,11 @@ exec = "sh -c 'echo once > /tmp/oc-perm-reply-{{1}}.json && agent-notifier openc
 name = "opencode-deny"
 description = "Deny an OpenCode permission request"
 exec = "sh -c 'echo reject > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} deny >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+
+[[commands]]
+name = "opencode-select"
+description = "Select an OpenCode permission choice"
+exec = "sh -c 'echo {{2}} > /tmp/oc-perm-reply-{{1}}.json && agent-notifier opencode-reply-result --perm {{1}} {{2}} >/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
 ```
 
 `markdown` sends a text-only interactive card so Feishu renders emphasis,

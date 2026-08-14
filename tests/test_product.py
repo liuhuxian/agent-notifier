@@ -122,6 +122,7 @@ exec = "python3 old.py deny {{1}}"
         self.assertNotIn("old.py", once)
         self.assertEqual(1, once.count('name = "codex-approve"'))
         self.assertEqual(1, once.count('name = "codex-deny"'))
+        self.assertEqual(1, once.count('name = "opencode-select"'))
         self.assertEqual(1, once.count('name = "agent-list"'))
         self.assertEqual(1, once.count('name = "agent-current"'))
         self.assertEqual(1, once.count('name = "agent-new"'))

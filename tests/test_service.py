@@ -1,12 +1,13 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from agent_notifier.approvals import ApprovalStore
 from agent_notifier.config import Paths
 from agent_notifier.registry import SessionRegistry
-from agent_notifier.service import SharedService
+from agent_notifier.service import SharedService, resolve_codex_binary
 
 
 def make_paths(root: Path) -> Paths:
@@ -21,6 +22,12 @@ def make_paths(root: Path) -> Paths:
         pid_file=root / "run/service.pid",
         lock_file=root / "run/service.lock",
     )
+
+
+class CodexBinaryResolutionTest(unittest.TestCase):
+    def test_explicit_override_wins(self):
+        with patch.dict(os.environ, {"AGENT_NOTIFIER_CODEX": "/custom/codex"}):
+            self.assertEqual("/custom/codex", resolve_codex_binary())
 
 
 class ApprovalNotificationTest(unittest.IsolatedAsyncioTestCase):

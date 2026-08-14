@@ -168,6 +168,63 @@ def build_button_set(buttons: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_opencode_approval_card(
+    perm_id: str,
+    perm_type: str,
+    filepath: str,
+    pattern: str = "",
+    session_key: str = "",
+    options: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Render an OpenCode permission request with its available choices."""
+    content_lines = [f"**类型**: {perm_type}"]
+    if pattern:
+        content_lines.append(f"**操作**: {pattern}")
+    if filepath:
+        content_lines.append(f"**路径**: {filepath}")
+    content_lines.append(f"**ID**: {perm_id[-8:] if perm_id else 'unknown'}")
+    option_defs = options or [
+        {"option_id": "once", "label": "允许一次"},
+        {"option_id": "reject", "label": "拒绝"},
+    ]
+    buttons = []
+    for option in option_defs:
+        option_id = str(option.get("option_id", "")).strip()
+        label = str(option.get("label", option_id)).strip() or option_id
+        if not option_id:
+            continue
+        if option_id == "once":
+            action = f"cmd:/opencode-approve {perm_id}"
+        elif option_id == "reject":
+            action = f"cmd:/opencode-deny {perm_id}"
+        else:
+            action = f"cmd:/opencode-select {perm_id} {option_id}"
+        buttons.append({
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label[:20]},
+            "type": "danger" if option_id == "reject" else "primary",
+            "width": "fill",
+            "behaviors": [{
+                "type": "callback",
+                "value": {
+                    "action": action,
+                    **({"session_key": session_key} if session_key else {}),
+                },
+            }],
+        })
+    if not buttons:
+        raise ValueError("OpenCode permission request has no selectable options")
+    return build_card_v2(
+        "orange",
+        "OpenCode 权限请求",
+        [
+            {"tag": "markdown", "content": "\n".join(content_lines)},
+            {"tag": "hr"},
+            build_button_set(buttons),
+        ],
+    )
+
+
 async def _post_json(
     session: ClientSession,
     url: str,
@@ -478,56 +535,14 @@ async def send_opencode_approval_card(
     filepath: str,
     pattern: str = "",
     session_key: str = "",
+    options: list[dict[str, str]] | None = None,
     config_path: Path = DEFAULT_CC_CONFIG,
 ) -> str:
     settings = load_feishu_settings(project, config_path)
     async with ClientSession() as session:
         token = await _tenant_access_token(session, settings)
-        short_perm = perm_id[-8:] if perm_id else "unknown"
-        content_lines = [f"**类型**: {perm_type}"]
-        if pattern:
-            content_lines.append(f"**操作**: {pattern}")
-        if filepath:
-            content_lines.append(f"**路径**: {filepath}")
-        content_lines.append(f"**ID**: {short_perm}")
-        card = build_card_v2(
-            "orange",
-            "OpenCode 权限请求",
-            [
-                {
-                    "tag": "markdown",
-                    "content": "\n".join(content_lines),
-                },
-                {"tag": "hr"},
-                build_button_set([
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "允许"},
-                        "type": "primary",
-                        "width": "fill",
-                        "behaviors": [{
-                            "type": "callback",
-                            "value": {
-                                "action": f"cmd:/opencode-approve {perm_id}",
-                                **({"session_key": session_key} if session_key else {}),
-                            },
-                        }],
-                    },
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "拒绝"},
-                        "type": "danger",
-                        "width": "fill",
-                        "behaviors": [{
-                            "type": "callback",
-                            "value": {
-                                "action": f"cmd:/opencode-deny {perm_id}",
-                                **({"session_key": session_key} if session_key else {}),
-                            },
-                        }],
-                    },
-                ]),
-            ],
+        card = build_opencode_approval_card(
+            perm_id, perm_type, filepath, pattern, session_key, options
         )
         sent = await _post_json(
             session,
@@ -557,7 +572,7 @@ async def update_opencode_approval_card(
     settings = load_feishu_settings(project, config_path)
     async with ClientSession() as session:
         token = await _tenant_access_token(session, settings)
-        if decision == "once":
+        if decision in {"once", "always"}:
             template, title, detail = "green", "已允许: OpenCode 权限请求", "已允许，OpenCode 继续执行。"
         elif decision == "reject":
             template, title, detail = "red", "已拒绝: OpenCode 权限请求", "已拒绝，OpenCode 取消操作。"

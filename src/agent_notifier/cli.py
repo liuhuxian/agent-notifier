@@ -35,7 +35,7 @@ from .hook_config import (
 from .native_hooks import build_completion_message, claim
 from .notification_routing import agent_route_name, resolve_thread_route_name
 from .registry import SessionRegistry
-from .service import SharedService, approval_details
+from .service import SharedService, approval_details, resolve_codex_binary
 from .setup import run_setup
 from .versioning import (
     CompatibilityError,
@@ -147,6 +147,7 @@ async def opencode_permission(
     filepath: str,
     pattern: str = "",
     route_name: str | None = None,
+    allow_always: bool = False,
 ) -> str:
     config = NotifierConfig.load(paths.config_file)
     registry = SessionRegistry(paths.state_db)
@@ -164,6 +165,10 @@ async def opencode_permission(
     route = config.notification_routes.get(resolved_route or route_name)
     if route is None:
         raise ValueError(f"notification route {route_name!r} is not configured")
+    options = [{"option_id": "once", "label": "允许一次"}]
+    if allow_always:
+        options.append({"option_id": "always", "label": "始终允许"})
+    options.append({"option_id": "reject", "label": "拒绝"})
     message_id = await send_opencode_approval_card(
         project=route.project,
         receive_id=route.receive_id,
@@ -174,6 +179,7 @@ async def opencode_permission(
         filepath=filepath,
         pattern=pattern,
         session_key=route.session_key,
+        options=options,
     )
     import json
     meta_path = Path(f"/tmp/oc-perm-msg-{perm_id}.json")
@@ -201,7 +207,14 @@ async def opencode_reply_result(
         meta_path.unlink()
     except Exception:
         pass
-    response = "once" if decision == "allow" else ("reject" if decision == "deny" else "neutral")
+    response = {
+        "allow": "once",
+        "deny": "reject",
+        "once": "once",
+        "always": "always",
+        "reject": "reject",
+        "neutral": "neutral",
+    }[decision]
     return await update_opencode_approval_card(
         project=meta["project"],
         message_id=meta["message_id"],
@@ -1077,6 +1090,10 @@ def build_parser() -> argparse.ArgumentParser:
     oc_perm.add_argument("--path", default="")
     oc_perm.add_argument("--pattern", default="")
     oc_perm.add_argument(
+        "--allow-always", action="store_true",
+        help="include OpenCode's durable allow choice",
+    )
+    oc_perm.add_argument(
         "--route",
         default=None,
         help="configured outbound notification route (default: agent_routes.opencode)",
@@ -1095,7 +1112,10 @@ def build_parser() -> argparse.ArgumentParser:
         "opencode-reply-result", help="update an opencode approval card with the result"
     )
     oc_reply.add_argument("--perm", required=True)
-    oc_reply.add_argument("decision", choices=("allow", "deny", "neutral"))
+    oc_reply.add_argument(
+        "decision",
+        choices=("allow", "deny", "once", "always", "reject", "neutral"),
+    )
     native_hook = sub.add_parser(
         "native-hook", help="handle a native Codex lifecycle hook"
     )
@@ -1167,7 +1187,11 @@ def main() -> None:
             else:
                 asyncio.run(run_acp(paths))
         elif args.command == "codex":
-            check_versions(require_cc=False)
+            codex_binary = resolve_codex_binary()
+            check_versions(
+                require_cc=False,
+                codex_binary=codex_binary,
+            )
             ensure_service(paths)
             thread_id = _resume_thread_id(args.codex_args)
             if args.notify_project and thread_id is None:
@@ -1188,9 +1212,9 @@ def main() -> None:
                     f"<- {mapping.thread_id}",
                     file=sys.stderr,
                 )
-            os.execvp(
-                "codex",
-                ["codex", "--remote", f"unix://{paths.proxy_socket}", *args.codex_args],
+            os.execv(
+                codex_binary,
+                [codex_binary, "--remote", f"unix://{paths.proxy_socket}", *args.codex_args],
             )
         elif args.command == "bind":
             mapping = bind_terminal_thread(
@@ -1303,7 +1327,8 @@ def main() -> None:
         elif args.command == "opencode-permission":
             message_id = asyncio.run(
                 opencode_permission(
-                    paths, args.session, args.perm, args.type, args.path, args.pattern, args.route
+                    paths, args.session, args.perm, args.type, args.path,
+                    args.pattern, args.route, args.allow_always
                 )
             )
             print(f"sent: {message_id}")
@@ -1339,8 +1364,10 @@ def main() -> None:
             print(f"pid: {pid}")
             print(f"socket: {paths.proxy_socket}")
         elif args.command == "doctor":
+            codex_binary = resolve_codex_binary()
             codex_version, cc_version = check_versions(
                 require_cc=args.strict,
+                codex_binary=codex_binary,
                 require_codex=args.strict,
             )
             print(

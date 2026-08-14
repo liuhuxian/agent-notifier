@@ -6,6 +6,7 @@ import asyncio
 import fcntl
 import logging
 import os
+import shlex
 import signal
 import stat
 import shutil
@@ -28,6 +29,36 @@ from .registry import SessionRegistry
 
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_codex_binary() -> str:
+    """Resolve the Codex executable used by the managed service.
+
+    The interactive CLI may have a different PATH from the systemd service.
+    Prefer the explicit environment override and the installed unit's path so
+    version checks and `agent-notifier codex` use the same binary as the proxy.
+    """
+    configured = os.environ.get("AGENT_NOTIFIER_CODEX")
+    if configured:
+        return configured
+
+    unit_path = Path.home() / ".config/systemd/user/agent-notifier.service"
+    try:
+        for line in unit_path.read_text().splitlines():
+            if not line.startswith("ExecStart="):
+                continue
+            argv = shlex.split(line.removeprefix("ExecStart="))
+            if "--codex" not in argv:
+                continue
+            index = argv.index("--codex")
+            if index + 1 < len(argv):
+                candidate = argv[index + 1]
+                if candidate != "codex" and Path(candidate).exists():
+                    return candidate
+    except (OSError, ValueError):
+        pass
+
+    return shutil.which("codex") or "codex"
 
 
 def approval_details(request: dict) -> tuple[str, str]:

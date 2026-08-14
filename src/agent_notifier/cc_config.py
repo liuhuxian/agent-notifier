@@ -96,6 +96,16 @@ def _configure_approval_commands(source: str, command: str) -> str:
     )
     source = _upsert_command(
         source,
+        "opencode-select",
+        "Select an OpenCode permission choice",
+        (
+            "sh -c 'echo {{2}} > /tmp/oc-perm-reply-{{1}}.json && "
+            f"{command} opencode-reply-result --perm {{1}} {{2}} "
+            ">/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+        ),
+    )
+    source = _upsert_command(
+        source,
         "agent-list",
         "List subscribed sessions for one coding agent",
         f"{command} agent-list {{{{1}}}}",

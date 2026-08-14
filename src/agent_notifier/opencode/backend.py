@@ -241,7 +241,7 @@ class OpencodeBackend:
                             await emit({"kind": "text", "text": delta})
 
                 elif event_type == "permission.asked":
-                    pass
+                    await self._forward_permission(props, session_id, emit)
 
                 elif event_type == "session.idle":
                     final_text = "".join(accumulated_text).strip()
@@ -279,6 +279,24 @@ class OpencodeBackend:
             "kind": "permission",
             "rawInput": {"permission": perm_type, "filepath": filepath},
         }
+        options = [
+            {
+                "optionId": "allow_once",
+                "name": "允许一次",
+                "kind": "allow_once",
+            },
+        ]
+        if props.get("always"):
+            options.append({
+                "optionId": "allow_always",
+                "name": "始终允许",
+                "kind": "allow_always",
+            })
+        options.append({
+            "optionId": "deny_once",
+            "name": "拒绝",
+            "kind": "reject_once",
+        })
         if self.progress.progress_card:
             await emit({
                 "kind": "tool_start",
@@ -291,17 +309,18 @@ class OpencodeBackend:
             result = await self._request_permission({
                 "sessionId": session_id,
                 "toolCall": tool_call,
-                "options": [
-                    {"optionId": "allow_once", "name": "Allow", "kind": "allow_once"},
-                    {"optionId": "deny_once", "name": "Deny", "kind": "reject_once"},
-                ],
+                "options": options,
             })
             outcome = result.get("outcome") or {}
             allowed = (
                 outcome.get("outcome") == "selected"
-                and outcome.get("optionId") == "allow_once"
+                and outcome.get("optionId") in {"allow_once", "allow_always"}
             )
-            response = "once" if allowed else "reject"
+            response = (
+                "always"
+                if outcome.get("optionId") == "allow_always"
+                else ("once" if allowed else "reject")
+            )
             if self.progress.progress_card:
                 await emit({
                     "kind": "tool_complete",

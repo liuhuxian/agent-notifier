@@ -204,11 +204,13 @@ export const FeishuNotify = async ({ $, client, directory }) => {
           "--type", permType,
           "--path", filepath,
           "--pattern", patterns,
+          ...(Array.isArray(props.always) && props.always.length > 0
+            ? ["--allow-always"] : []),
         ], { stdio: "ignore" })
         const interval = setInterval(async () => {
           try {
             const reply = fs.readFileSync(replyFile, "utf8").trim()
-            if (reply !== "once" && reply !== "reject") return
+            if (reply !== "once" && reply !== "always" && reply !== "reject") return
             clearInterval(interval)
             try { fs.unlinkSync(replyFile) } catch {}
             await fetch(`http://127.0.0.1:4098/permission/${pid}/reply`, {
