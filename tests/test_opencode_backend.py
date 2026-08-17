@@ -26,6 +26,9 @@ class FakeOpencodeClient:
     async def start_sse(self):
         self.sse_started = True
 
+    async def set_directory(self, directory):
+        self.directory = directory
+
     async def next_event(self):
         return await self.events.get()
 
@@ -39,7 +42,7 @@ class FakeOpencodeClient:
 
     async def send_prompt(self, session_id, text):
         self.prompts.append((session_id, text))
-        return {"info": {"id": "msg_test"}}
+        return {"info": {"id": "msg_current", "role": "assistant"}}
 
     async def reply_permission(self, session_id, permission_id, response):
         self.permission_replies.append((session_id, permission_id, response))
@@ -82,6 +85,29 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session_id.startswith("ses_test_"))
         mapping = self.registry.get("cc_connect", "le-wm", "feishu:one")
         self.assertEqual(session_id, mapping.thread_id)
+
+    async def test_event_dispatcher_survives_sse_error(self):
+        session_id = "ses_dispatcher_reconnect"
+        queue = asyncio.Queue()
+        self.backend._subscribers[session_id].append(queue)
+        task = asyncio.create_task(self.backend._dispatch_events())
+        try:
+            await self.client.events.put({
+                "type": "_error", "error": "SSE disconnected"
+            })
+            self.assertEqual(
+                "_error", (await asyncio.wait_for(queue.get(), 1))["type"]
+            )
+            await self.client.events.put({
+                "type": "message.updated",
+                "properties": {"sessionID": session_id},
+            })
+            event = await asyncio.wait_for(queue.get(), 1)
+            self.assertEqual("message.updated", event["type"])
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.backend._subscribers[session_id].remove(queue)
 
     async def test_tool_lifecycle_socket_emits_acp_events(self):
         socket_path = Path(self.tmp.name) / "opencode-tools.sock"
@@ -166,12 +192,64 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.sleep(0.05)
         await self.client.events.put({
+            "type": "message.updated",
+            "properties": {
+                "sessionID": session_id,
+                "info": {"id": "msg_current", "role": "assistant"},
+            },
+        })
+        await self.client.events.put({
             "type": "session.idle",
             "properties": {"sessionID": session_id},
         })
         result = await asyncio.wait_for(task, timeout=2)
         self.assertEqual("end_turn", result.get("stopReason"))
         self.assertIn(("ses_test_prompt", "hello"), self.client.prompts)
+
+    async def test_prompt_rejects_idle_without_current_assistant_message(self):
+        session_id = "ses_test_stale_idle"
+
+        async def emit(event):
+            pass
+
+        task = asyncio.create_task(
+            self.backend.prompt(session_id, "hello", "cc_connect", emit)
+        )
+        await asyncio.sleep(0.05)
+        await self.client.events.put({
+            "type": "session.idle",
+            "properties": {"sessionID": session_id},
+        })
+        with self.assertRaisesRegex(
+            RuntimeError, "without a new assistant message"
+        ):
+            await asyncio.wait_for(task, timeout=2)
+
+    async def test_prompt_rejects_idle_after_unrelated_assistant_message(self):
+        session_id = "ses_test_stale_assistant"
+
+        async def emit(event):
+            pass
+
+        task = asyncio.create_task(
+            self.backend.prompt(session_id, "hello", "cc_connect", emit)
+        )
+        await asyncio.sleep(0.05)
+        await self.client.events.put({
+            "type": "message.updated",
+            "properties": {
+                "sessionID": session_id,
+                "info": {"id": "msg_from_previous_turn", "role": "assistant"},
+            },
+        })
+        await self.client.events.put({
+            "type": "session.idle",
+            "properties": {"sessionID": session_id},
+        })
+        with self.assertRaisesRegex(
+            RuntimeError, "without a new assistant message"
+        ):
+            await asyncio.wait_for(task, timeout=2)
 
     async def test_prompt_emits_heartbeat_during_silent_turn(self):
         session_id = "ses_test_heartbeat"
@@ -187,6 +265,13 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             self.backend.prompt(session_id, "long task", "cc_connect", emit)
         )
         await asyncio.sleep(1.1)
+        await self.client.events.put({
+            "type": "message.updated",
+            "properties": {
+                "sessionID": session_id,
+                "info": {"id": "msg_current", "role": "assistant"},
+            },
+        })
         await self.client.events.put({
             "type": "session.idle",
             "properties": {"sessionID": session_id},
@@ -216,7 +301,7 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             "type": "message.updated",
             "properties": {
                 "sessionID": session_id,
-                "info": {"id": "msg_asst", "role": "assistant"},
+                "info": {"id": "msg_current", "role": "assistant"},
             },
         })
         # Register a text part belonging to the assistant message
@@ -224,14 +309,14 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             "type": "message.part.updated",
             "properties": {
                 "sessionID": session_id,
-                "part": {"id": "prt_1", "messageID": "msg_asst", "type": "text", "text": ""},
+                "part": {"id": "prt_1", "messageID": "msg_current", "type": "text", "text": ""},
             },
         })
         await self.client.events.put({
             "type": "message.part.delta",
             "properties": {
                 "sessionID": session_id,
-                "messageID": "msg_asst",
+                "messageID": "msg_current",
                 "partID": "prt_1",
                 "field": "text",
                 "delta": "Hello ",
@@ -241,7 +326,7 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             "type": "message.part.delta",
             "properties": {
                 "sessionID": session_id,
-                "messageID": "msg_asst",
+                "messageID": "msg_current",
                 "partID": "prt_1",
                 "field": "text",
                 "delta": "World",
@@ -276,14 +361,14 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
             "type": "message.updated",
             "properties": {
                 "sessionID": session_id,
-                "info": {"id": "msg_asst", "role": "assistant"},
+                "info": {"id": "msg_current", "role": "assistant"},
             },
         })
         await self.client.events.put({
             "type": "message.part.updated",
             "properties": {
                 "sessionID": session_id,
-                "part": {"id": "prt_reason", "messageID": "msg_asst", "type": "reasoning", "text": ""},
+                "part": {"id": "prt_reason", "messageID": "msg_current", "type": "reasoning", "text": ""},
             },
         })
         await self.client.events.put({
@@ -322,6 +407,13 @@ class OpencodeBackendTest(unittest.IsolatedAsyncioTestCase):
                 "permission": "write",
                 "metadata": {"filepath": "/tmp/test.txt"},
                 "always": ["/tmp/test.txt"],
+            },
+        })
+        await self.client.events.put({
+            "type": "message.updated",
+            "properties": {
+                "sessionID": session_id,
+                "info": {"id": "msg_current", "role": "assistant"},
             },
         })
         await self.client.events.put({

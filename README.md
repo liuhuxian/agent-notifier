@@ -422,6 +422,107 @@ agent-notifier restore-cc
 cc-connect daemon restart
 ```
 
+## 配置变更后的重启与检查
+
+三个服务的职责不同：
+
+```text
+agent-notifier.service  Agent Notifier proxy、Codex App Server 和运行时状态
+opencode-serve.service  OpenCode 4098 服务
+cc-connect.service      飞书连接和 ACP 子进程
+```
+
+修改 `~/.config/agent-notifier/config.toml`、通知路由、session 绑定或 Agent
+Notifier 源码后，重启 Agent Notifier 和 cc-connect：
+
+```bash
+systemctl --user restart agent-notifier.service
+systemctl --user restart cc-connect.service
+```
+
+如果修改了 OpenCode 服务配置、OpenCode 插件或 OpenCode 版本，按以下顺序重启：
+
+```bash
+systemctl --user restart opencode-serve.service
+systemctl --user restart agent-notifier.service
+systemctl --user restart cc-connect.service
+```
+
+`cc-connect` 中的 ACP 子进程会持有 OpenCode SSE 连接。只重启
+`opencode-serve.service` 不会让旧 ACP 子进程自动重新加载所有配置；重启
+`cc-connect.service` 是让 ACP bridge 重新建立连接的关键步骤。重启服务前应避免
+在途 turn 和 pending permission，服务重启不会重放可能产生副作用的操作。
+
+检查服务状态：
+
+```bash
+systemctl --user is-active \
+  agent-notifier.service opencode-serve.service cc-connect.service
+agent-notifier status
+agent-notifier doctor --strict
+```
+
+查看最近日志：
+
+```bash
+journalctl --user -u agent-notifier.service -n 100 --no-pager
+journalctl --user -u opencode-serve.service -n 100 --no-pager
+journalctl --user -u cc-connect.service -n 100 --no-pager
+```
+
+也可以使用 cc-connect 自己的重启命令：
+
+```bash
+cc-connect daemon restart
+```
+
+如果该命令返回后 ACP 子进程仍未更新，使用上面的
+`systemctl --user restart cc-connect.service`，然后用 `systemctl --user show`
+检查 `MainPID` 和 `ActiveEnterTimestamp` 是否已经变化。
+
+### OpenCode 项目目录
+
+OpenCode 4098 服务按 project directory 区分 session。最稳妥的终端启动方式是显式
+指定目录：
+
+```bash
+opencode attach http://127.0.0.1:4098 \
+  --dir /path/to/project \
+  -s <OPENCODE_SESSION_ID>
+```
+
+不带 `--dir` 时，OpenCode 使用客户端/服务端的默认 project，不能保证与 session
+所属目录一致。Agent Notifier 的 ACP client 会从 ACP `cwd` 自动把 directory
+附加到 OpenCode 的 session、message、permission 和 SSE 请求，因此飞书发起的
+turn 不需要额外手动指定目录。
+
+### 将终端 OpenCode 通知绑定到指定群
+
+交互群和终端通知群是两套路由。若某个终端 OpenCode session 的完成、异常和审批
+也应发送到群 A，显式绑定一次：
+
+```bash
+agent-notifier bind-terminal \
+  --thread-id <OPENCODE_SESSION_ID> \
+  --route opencode_group
+```
+
+绑定会写入 Agent Notifier 的本地 registry，不会修改 Git 仓库。验证绑定：
+
+```bash
+agent-notifier status
+```
+
+## 常见恢复路径
+
+| 现象 | 处理 |
+|---|---|
+| 修改通知配置后仍使用旧群 | 重启 `agent-notifier.service` 和 `cc-connect.service` |
+| OpenCode 重启后飞书 turn 堵塞 | 重启 `cc-connect.service`，重新建立 ACP SSE |
+| 终端 OpenCode 回复到错误群 | 用 `bind-terminal --route opencode_group` 重新绑定 session |
+| attach 不带 `--dir` 无响应 | 使用显式 `--dir` 进入 session 所属 project |
+| 服务显示 active 但消息无响应 | 检查三个服务日志，并比较 `cc-connect.service` 的 `MainPID` |
+
 ## 使用
 
 启动或接入共享服务，并打开完整 Codex TUI：
@@ -570,7 +671,8 @@ scripts/smoke_test.sh
 
 ## 已知边界
 
-- 首版不支持 OpenCode。
+- OpenCode 支持依赖 OpenCode serve API、ACP bridge 和 project directory；升级后应
+  运行 `agent-notifier doctor --strict` 并做一次实际消息冒烟测试。
 - 本地 Unix socket 不对网络开放。
 - cc-connect 与 Codex 升级后必须重新通过兼容性测试。
 - App Server 意外退出时，在途请求会明确失败，不会自动重放可能产生副作用的操作。

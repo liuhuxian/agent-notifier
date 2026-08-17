@@ -812,7 +812,7 @@ async def run_acp_opencode(paths: Paths, base_url: str) -> None:
     from .opencode.backend import OpencodeBackend
     from .opencode.client import OpencodeClient
 
-    client = OpencodeClient(base_url)
+    client = OpencodeClient(base_url, directory=os.getcwd())
     await client.connect()
     await client.start_sse()
     registry = SessionRegistry(paths.state_db)
@@ -850,7 +850,7 @@ async def run_acp_multi(paths: Paths, base_url: str) -> None:
     codex_rpc = CodexAppServerClient(paths.proxy_socket, "cc_connect")
     await codex_rpc.connect()
 
-    opencode_client = OpencodeClient(base_url)
+    opencode_client = OpencodeClient(base_url, directory=os.getcwd())
     await opencode_client.connect()
     await opencode_client.start_sse()
 

@@ -108,7 +108,9 @@ class OpencodeBackend:
                 for queues in list(self._subscribers.values()):
                     for queue in list(queues):
                         await queue.put(event)
-                return
+                # The SSE client reconnects in the background.  Keep the
+                # dispatcher alive so future prompts receive the new stream.
+                continue
             props = event.get("properties") or {}
             session_id = props.get("sessionID")
             if session_id:
@@ -133,6 +135,7 @@ class OpencodeBackend:
             )
 
     async def start_thread(self, cwd: str, project: str, external_key: str) -> str:
+        await self._client.set_directory(cwd)
         result = await self._client.create_session()
         session_id = result["id"]
         self._register_transport_session(project, external_key, session_id, cwd)
@@ -141,6 +144,7 @@ class OpencodeBackend:
     async def resume_thread(
         self, session_id: str, cwd: str, project: str, external_key: str
     ) -> str:
+        await self._client.set_directory(cwd)
         mapping = self.registry.get("cc_connect", project, external_key)
         if mapping is not None:
             self._register_transport_session(
@@ -194,7 +198,17 @@ class OpencodeBackend:
         try:
             self._active_emitters[session_id] = emit
             acp_flag.write_text("1")
-            await self._client.send_prompt(session_id, text)
+            prompt_result = await self._client.send_prompt(session_id, text)
+            prompt_info = (
+                prompt_result.get("info", {})
+                if isinstance(prompt_result, dict)
+                else {}
+            )
+            expected_assistant_id = (
+                str(prompt_info.get("id") or "")
+                if prompt_info.get("role") == "assistant"
+                else ""
+            )
             if self.progress.progress_card:
                 await emit({"kind": "status", "text": "正在思考"})
             heartbeat_task = asyncio.create_task(heartbeat())
@@ -210,7 +224,10 @@ class OpencodeBackend:
 
                 if event_type == "message.updated":
                     info = props.get("info") or props.get("message") or {}
-                    if info.get("role") == "assistant":
+                    if (
+                        info.get("role") == "assistant"
+                        and info.get("id") == expected_assistant_id
+                    ):
                         assistant_msg_ids.add(info.get("id", ""))
 
                 elif event_type == "message.part.updated":
@@ -244,6 +261,11 @@ class OpencodeBackend:
                     await self._forward_permission(props, session_id, emit)
 
                 elif event_type == "session.idle":
+                    if not assistant_msg_ids:
+                        raise RuntimeError(
+                            "opencode session became idle without a new "
+                            "assistant message for the current prompt"
+                        )
                     final_text = "".join(accumulated_text).strip()
                     if final_text and not self.progress.stream_preview:
                         await emit({"kind": "text", "text": final_text})
