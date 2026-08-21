@@ -136,6 +136,7 @@ class SharedService:
         self.paths.pid_file.write_text(str(os.getpid()))
         self.registry = SessionRegistry(self.paths.state_db)
         self.approval_store = ApprovalStore(self.paths.state_db)
+        await self._expire_non_terminal_approvals()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -205,6 +206,49 @@ class SharedService:
             self.paths.pid_file.unlink(missing_ok=True)
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
+
+    async def _expire_non_terminal_approvals(self) -> None:
+        if self.approval_store is None or self.registry is None:
+            return
+        records = self.approval_store.expire_non_terminal()
+        if records:
+            logger.info(
+                "expired %d non-terminal approvals after service restart",
+                len(records),
+            )
+        for record in records:
+            if not record.feishu_message_id:
+                continue
+            mapping = self.registry.find_by_thread(record.thread_id)
+            if mapping is None:
+                continue
+            route_name = self._thread_route_name(
+                record.thread_id, mapping, fallback=None
+            )
+            route = (
+                self.config.notification_routes.get(route_name)
+                if route_name
+                else None
+            )
+            reason, operation = approval_details(record.payload)
+            try:
+                await reply_approval_result_card(
+                    project=route.project if route else mapping.project,
+                    message_id=record.feishu_message_id,
+                    approval_id=approval_short_id(record.approval_id),
+                    decision="deny",
+                    status="expired",
+                    session_label=mapping.session_label,
+                    thread_id=record.thread_id,
+                    cwd=mapping.cwd,
+                    reason=reason,
+                    operation=operation,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to expire Feishu approval card: approval=%s",
+                    approval_short_id(record.approval_id),
+                )
 
     async def _notify_terminal_completion(self, thread_id: str, text: str) -> None:
         mapping = self.registry.find_by_thread(thread_id) if self.registry else None

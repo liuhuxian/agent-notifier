@@ -89,6 +89,7 @@ class ApprovalFanout:
         upstream,
         source_client_id: str | None = None,
         exclude_client_id: str | None = None,
+        origin: str | None = None,
     ) -> str:
         token = f"agent-notifier-approval:{uuid.uuid4()}"
         routed = dict(message)
@@ -102,6 +103,7 @@ class ApprovalFanout:
                 params.get("threadId") or "unknown",
                 message.get("method") or "approval",
                 message,
+                origin,
             )
         thread_id = (message.get("params") or {}).get("threadId")
         await self.event_hub.broadcast(
@@ -224,6 +226,12 @@ class ApprovalFanout:
                     if token.rsplit(":", 1)[-1].startswith(approval_id)
                 ]
         if not candidates:
+            if self.store:
+                record = self.store.find_by_prefix(approval_id)
+                if record and record.decision == "expired":
+                    return "expired"
+                if record and record.decision is not None:
+                    return "already_resolved"
             raise KeyError(approval_id)
         if len(candidates) > 1:
             raise ValueError(f"ambiguous approval id: {approval_id}")
@@ -405,6 +413,8 @@ class AppServerProxy:
                                 payload, client_id
                             ):
                                 continue
+                            thread_id = (payload.get("params") or {}).get("threadId")
+                            origin = self._thread_origins.get(thread_id, client_kind)
                             token = await self.fanout.publish(
                                 payload,
                                 upstream,
@@ -414,10 +424,9 @@ class AppServerProxy:
                                     if client_kind == "cc_connect"
                                     else None
                                 ),
+                                origin=origin,
                             )
                             if self.on_approval_request:
-                                thread_id = (payload.get("params") or {}).get("threadId")
-                                origin = self._thread_origins.get(thread_id, client_kind)
                                 try:
                                     await self.on_approval_request(
                                         token, payload, origin

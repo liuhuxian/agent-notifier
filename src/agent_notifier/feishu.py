@@ -103,7 +103,11 @@ def build_approval_result_card(
     reason: str | None = None,
     operation: str | None = None,
 ) -> dict[str, Any]:
-    if status == "already_resolved":
+    if status == "expired":
+        template = "grey"
+        title = "已失效：Codex 权限请求"
+        detail = "该审批因 Agent Notifier 重启已失效，请重新触发。"
+    elif status == "already_resolved":
         template = "grey"
         title = "已处理：Codex 权限请求"
         detail = "该权限请求已在其他终端处理，本次操作未改变审批结果。"
@@ -122,6 +126,8 @@ def build_approval_result_card(
     )
     if reason is not None and operation is not None:
         content += f"**原因**：{reason}\n**操作**：`{operation}`"
+        if status == "expired":
+            content += f"\n\n{detail}"
     else:
         content += detail
     return build_card_v2(

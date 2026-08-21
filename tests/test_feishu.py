@@ -134,6 +134,24 @@ app_secret = "secret"
             allowed["body"]["elements"][0]["content"],
         )
 
+    def test_expired_result_card_is_grey_and_explains_restart(self):
+        expired = build_approval_result_card(
+            "1234567890",
+            "deny",
+            "expired",
+            "le-wm",
+            "thread-1",
+            "/workspace",
+            "permission request",
+            "date",
+        )
+        self.assertEqual("grey", expired["header"]["template"])
+        self.assertEqual(
+            "已失效：Codex 权限请求",
+            expired["header"]["title"]["content"],
+        )
+        self.assertIn("重启已失效", expired["body"]["elements"][0]["content"])
+
 
 class FeishuMessageTest(unittest.IsolatedAsyncioTestCase):
     def test_completion_card_v2_has_fixed_blue_title_and_body(self):

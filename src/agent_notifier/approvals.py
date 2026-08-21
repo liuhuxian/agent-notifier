@@ -26,6 +26,8 @@ class ApprovalRecord:
     thread_id: str
     feishu_message_id: str | None
     payload: dict
+    origin: str | None = None
+    decision: str | None = None
 
 
 class ApprovalStore:
@@ -43,7 +45,8 @@ class ApprovalStore:
                 payload_json TEXT NOT NULL,
                 decision TEXT,
                 resolved_by TEXT,
-                resolved_at TEXT
+                resolved_at TEXT,
+                origin TEXT
             )
             """
         )
@@ -54,18 +57,70 @@ class ApprovalStore:
             self._conn.execute(
                 "ALTER TABLE approvals ADD COLUMN feishu_message_id TEXT"
             )
+        if "origin" not in columns:
+            self._conn.execute("ALTER TABLE approvals ADD COLUMN origin TEXT")
         self._conn.commit()
 
-    def register(self, approval_id: str, thread_id: str, kind: str, payload: dict) -> None:
+    def register(
+        self,
+        approval_id: str,
+        thread_id: str,
+        kind: str,
+        payload: dict,
+        origin: str | None = None,
+    ) -> None:
         with self._lock, self._conn:
             self._conn.execute(
                 """
                 INSERT OR IGNORE INTO approvals
-                    (approval_id, thread_id, kind, payload_json)
-                VALUES (?, ?, ?, ?)
+                    (approval_id, thread_id, kind, payload_json, origin)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (approval_id, thread_id, kind, json.dumps(payload, sort_keys=True)),
+                (
+                    approval_id,
+                    thread_id,
+                    kind,
+                    json.dumps(payload, sort_keys=True),
+                    origin,
+                ),
             )
+
+    def expire_non_terminal(self) -> list[ApprovalRecord]:
+        """Expire notifier-managed approvals while preserving terminal ones."""
+        with self._lock, self._conn:
+            rows = self._conn.execute(
+                """
+                SELECT approval_id, thread_id, feishu_message_id,
+                       payload_json, origin
+                FROM approvals
+                WHERE decision IS NULL
+                  AND origin IS NOT NULL
+                  AND origin != 'terminal'
+                """
+            ).fetchall()
+            if rows:
+                self._conn.execute(
+                    """
+                    UPDATE approvals
+                    SET decision = 'expired',
+                        resolved_by = 'service_restart',
+                        resolved_at = CURRENT_TIMESTAMP
+                    WHERE decision IS NULL
+                      AND origin IS NOT NULL
+                      AND origin != 'terminal'
+                    """
+                )
+        return [
+            ApprovalRecord(
+                approval_id,
+                thread_id,
+                message_id,
+                json.loads(payload_json),
+                origin,
+                "expired",
+            )
+            for approval_id, thread_id, message_id, payload_json, origin in rows
+        ]
 
     def resolve(self, approval_id: str, decision: str, resolved_by: str) -> ApprovalResolution:
         if decision not in {"allow", "deny"}:
@@ -115,6 +170,7 @@ class ApprovalStore:
             rows = self._conn.execute(
                 """
                 SELECT approval_id, thread_id, feishu_message_id, payload_json
+                       , origin, decision
                 FROM approvals
                 WHERE approval_id = ?
                    OR approval_id LIKE ?
@@ -126,12 +182,14 @@ class ApprovalStore:
             return None
         if len(rows) > 1:
             raise ValueError(f"ambiguous approval id: {approval_id}")
-        approval_id, thread_id, message_id, payload_json = rows[0]
+        approval_id, thread_id, message_id, payload_json, origin, decision = rows[0]
         return ApprovalRecord(
             approval_id,
             thread_id,
             message_id,
             json.loads(payload_json),
+            origin,
+            decision,
         )
 
     def close(self) -> None:

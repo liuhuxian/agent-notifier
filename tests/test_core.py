@@ -159,6 +159,36 @@ class ApprovalStoreTest(unittest.TestCase):
             self.assertEqual("om_message", record.feishu_message_id)
             store.close()
 
+    def test_restart_expires_cc_connect_but_preserves_terminal_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ApprovalStore(Path(tmp) / "state.sqlite3")
+            store.register(
+                "agent-notifier-approval:feishu123456",
+                "thread-feishu",
+                "command",
+                {"command": "date"},
+                origin="cc_connect",
+            )
+            store.register(
+                "agent-notifier-approval:terminal123456",
+                "thread-terminal",
+                "command",
+                {"command": "date"},
+                origin="terminal",
+            )
+
+            expired = store.expire_non_terminal()
+
+            self.assertEqual(
+                ["agent-notifier-approval:feishu123456"],
+                [record.approval_id for record in expired],
+            )
+            self.assertEqual(
+                "expired", store.find_by_prefix("feishu123456").decision
+            )
+            self.assertIsNone(store.find_by_prefix("terminal123456").decision)
+            store.close()
+
     def test_existing_approval_table_is_migrated_for_feishu_message_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "state.sqlite3"
