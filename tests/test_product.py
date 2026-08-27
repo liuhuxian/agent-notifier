@@ -69,6 +69,17 @@ type = "opencode"
             'exec = "/home/me/.local/bin/agent-notifier decide deny {{1}}"',
             result,
         )
+        self.assertIn('name = "opencode-approve"', result)
+        self.assertIn('name = "opencode-deny"', result)
+        self.assertIn(
+            'opencode-reply-result --perm $1 once',
+            result,
+        )
+        self.assertIn(
+            'opencode-reply-result --perm {{1}} {{2}}',
+            result,
+        )
+        self.assertNotIn('/permission/$1/reply', result)
         self.assertNotIn('name = "codex-switch"', result)
         self.assertIn(
             'exec = "/home/me/.local/bin/agent-notifier agent-list {{1}}"',

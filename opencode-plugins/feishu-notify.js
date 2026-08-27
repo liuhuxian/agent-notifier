@@ -207,28 +207,32 @@ export const FeishuNotify = async ({ $, client, directory }) => {
           ...(Array.isArray(props.always) && props.always.length > 0
             ? ["--allow-always"] : []),
         ], { stdio: "ignore" })
-        const interval = setInterval(async () => {
-          try {
-            const reply = fs.readFileSync(replyFile, "utf8").trim()
-            if (reply !== "once" && reply !== "always" && reply !== "reject") return
-            clearInterval(interval)
-            try { fs.unlinkSync(replyFile) } catch {}
-            await fetch(`http://127.0.0.1:4098/permission/${pid}/reply`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ reply }),
-            })
-          } catch {}
-        }, 1000)
-        setTimeout(() => clearInterval(interval), 120000)
+        // cc-connect executes the generated command, which now resolves the
+        // request through the current session-scoped OpenCode API. The file is
+        // retained only for compatibility with older command configurations.
         return
       }
 
       if (type === "permission.replied") {
         const props = event?.properties || {}
         const pid = props.requestID || ""
+        const sid = props.sessionID || props.sessionId || ""
         const home = process.env.HOME || "~"
         if (pid) {
+          const fs = require("fs")
+          const feishuMarker = `/tmp/oc-perm-feishu-${pid}.marker`
+          const sessionMarker = sid
+            ? `/tmp/oc-perm-feishu-session-${sid}.marker`
+            : ""
+          if (
+            fs.existsSync(feishuMarker) ||
+            (sessionMarker && fs.existsSync(sessionMarker))
+          ) {
+            for (const marker of [feishuMarker, sessionMarker]) {
+              if (marker) try { fs.unlinkSync(marker) } catch {}
+            }
+            return
+          }
           try {
             await $`${home}/.local/bin/agent-notifier opencode-reply-result --perm "${pid}" neutral`.quiet()
           } catch {}

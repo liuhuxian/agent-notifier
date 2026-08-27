@@ -96,12 +96,32 @@ def _configure_approval_commands(source: str, command: str) -> str:
     )
     source = _upsert_command(
         source,
+        "opencode-approve",
+        "Approve a pending OpenCode permission request",
+        (
+            "sh -c 'echo once > /tmp/oc-perm-reply-$1.json && "
+            f"{command} opencode-reply-result --perm $1 once && "
+            "date \"+%Y-%m-%d %H:%M:%S\"' sh {{1}}"
+        ),
+    )
+    source = _upsert_command(
+        source,
+        "opencode-deny",
+        "Deny a pending OpenCode permission request",
+        (
+            "sh -c 'echo reject > /tmp/oc-perm-reply-$1.json && "
+            f"{command} opencode-reply-result --perm $1 reject && "
+            "date \"+%Y-%m-%d %H:%M:%S\"' sh {{1}}"
+        ),
+    )
+    source = _upsert_command(
+        source,
         "opencode-select",
         "Select an OpenCode permission choice",
         (
             "sh -c 'echo {{2}} > /tmp/oc-perm-reply-{{1}}.json && "
-            f"{command} opencode-reply-result --perm {{1}} {{2}} "
-            ">/dev/null 2>&1 && date \"+%Y-%m-%d %H:%M:%S\"'"
+            f"{command} opencode-reply-result --perm {{{{1}}}} {{{{2}}}} && "
+            "date \"+%Y-%m-%d %H:%M:%S\"'"
         ),
     )
     source = _upsert_command(

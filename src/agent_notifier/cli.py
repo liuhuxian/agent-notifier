@@ -186,6 +186,7 @@ async def opencode_permission(
     meta_path.write_text(json.dumps({
         "message_id": message_id,
         "project": route.project,
+        "session_id": session_id,
         "perm_type": perm_type,
         "filepath": filepath,
     }))
@@ -203,10 +204,6 @@ async def opencode_reply_result(
     if not meta_path.exists():
         raise RuntimeError(f"no card metadata found for {perm_id}")
     meta = json.loads(meta_path.read_text())
-    try:
-        meta_path.unlink()
-    except Exception:
-        pass
     response = {
         "allow": "once",
         "deny": "reject",
@@ -215,13 +212,36 @@ async def opencode_reply_result(
         "reject": "reject",
         "neutral": "neutral",
     }[decision]
-    return await update_opencode_approval_card(
+    if response != "neutral":
+        if not meta.get("session_id"):
+            raise RuntimeError(
+                f"approval metadata for {perm_id} has no OpenCode session_id"
+            )
+        # OpenCode emits permission.replied immediately after this API call.
+        # Tell the plugin that this resolution originated from Feishu so its
+        # terminal-side neutral update cannot overwrite the result card.
+        Path(f"/tmp/oc-perm-feishu-{perm_id}.marker").touch()
+        Path(
+            f"/tmp/oc-perm-feishu-session-{meta['session_id']}.marker"
+        ).touch()
+        await opencode_decide(
+            meta["session_id"],
+            perm_id,
+            response,
+            os.environ.get("AGENT_NOTIFIER_OPENCODE_URL", "http://127.0.0.1:4098"),
+        )
+    result = await update_opencode_approval_card(
         project=meta["project"],
         message_id=meta["message_id"],
         perm_type=meta.get("perm_type", "unknown"),
         filepath=meta.get("filepath", ""),
         decision=response,
     )
+    try:
+        meta_path.unlink()
+    except Exception:
+        pass
+    return result
 
 
 async def opencode_decide(
@@ -236,8 +256,8 @@ async def opencode_decide(
     response = response_map.get(decision, decision)
     async with ClientSession() as session:
         async with session.post(
-            f"{base_url}/permission/{perm_id}/reply",
-            json={"reply": response},
+            f"{base_url}/session/{session_id}/permissions/{perm_id}",
+            json={"response": response},
         ) as resp:
             if resp.status >= 400:
                 text = await resp.text()
