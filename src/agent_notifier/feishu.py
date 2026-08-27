@@ -231,6 +231,159 @@ def build_opencode_approval_card(
     )
 
 
+def build_opencode_question_card(
+    request_id: str,
+    session_id: str,
+    questions: list[dict[str, Any]],
+    session_key: str = "",
+) -> dict[str, Any]:
+    """Render an OpenCode question request with one option row per question."""
+    elements: list[dict[str, Any]] = []
+    for question_index, question in enumerate(questions):
+        header = str(question.get("header", "问题")).strip() or "问题"
+        text = str(question.get("question", "")).strip()
+        content = f"**{header}**"
+        if text:
+            content += f"\n{text}"
+        if question.get("custom", True):
+            content += "\n（当前支持选项选择；自定义文字请在 OpenCode 终端输入）"
+        elements.append({"tag": "markdown", "content": content})
+        buttons = []
+        for option_index, option in enumerate(question.get("options", [])):
+            label = str(option.get("label", option.get("value", ""))).strip()
+            if not label:
+                continue
+            action = f"cmd:/opencode-question-select {request_id} {question_index} {option_index}"
+            buttons.append({
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": label[:20]},
+                "type": "primary",
+                "width": "fill",
+                "behaviors": [{
+                    "type": "callback",
+                    "value": {
+                        "action": action,
+                        **({"session_key": session_key} if session_key else {}),
+                    },
+                }],
+            })
+        if not buttons:
+            raise ValueError(f"OpenCode question {question_index} has no options")
+        elements.append(build_button_set(buttons))
+        if question_index != len(questions) - 1:
+            elements.append({"tag": "hr"})
+    elements.extend([
+        {"tag": "hr"},
+        {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": "提交回答"},
+            "type": "primary",
+            "width": "fill",
+            "behaviors": [{
+                "type": "callback",
+                "value": {
+                    "action": f"cmd:/opencode-question-submit {request_id}",
+                    **({"session_key": session_key} if session_key else {}),
+                },
+            }],
+        },
+    ])
+    return build_card_v2(
+        "orange",
+        "OpenCode 问题选择",
+        [{"tag": "markdown", "content": f"**会话**：{session_id[-8:]}\n**请求 ID**：{request_id[-8:]}"}, *elements],
+    )
+
+
+async def send_opencode_question_card(
+    project: str,
+    receive_id: str,
+    receive_id_type: str,
+    session_id: str,
+    request_id: str,
+    questions: list[dict[str, Any]],
+    session_key: str = "",
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> str:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        card = build_opencode_question_card(
+            request_id, session_id, questions, session_key
+        )
+        sent = await _post_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages"
+            f"?receive_id_type={receive_id_type}",
+            {
+                "receive_id": receive_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            token,
+        )
+        message_id = str(sent.get("data", {}).get("message_id", ""))
+        if not message_id:
+            raise RuntimeError("Feishu API did not return message_id")
+        return message_id
+
+
+def build_opencode_question_result_card(
+    request_id: str,
+    session_id: str,
+    questions: list[dict[str, Any]],
+    answers: list[list[str]],
+    status: str = "answered",
+) -> dict[str, Any]:
+    if status == "terminal":
+        template, title = "grey", "已处理：OpenCode 问题选择"
+    elif status == "rejected":
+        template, title = "grey", "已拒绝：OpenCode 问题选择"
+    else:
+        template, title = "green", "已回答：OpenCode 问题选择"
+    elements = [{
+        "tag": "markdown",
+        "content": f"**会话**：{session_id[-8:]}\n**请求 ID**：{request_id[-8:]}",
+    }]
+    for index, question in enumerate(questions):
+        header = str(question.get("header", "问题")).strip() or "问题"
+        selected = answers[index] if index < len(answers) else []
+        values = "、".join(str(value) for value in selected) or "未选择"
+        elements.append({
+            "tag": "markdown",
+            "content": f"**{header}**\n{question.get('question', '')}\n**已选择**：{values}",
+        })
+    return build_card_v2(template, title, elements)
+
+
+async def update_opencode_question_card(
+    project: str,
+    message_id: str,
+    request_id: str,
+    session_id: str,
+    questions: list[dict[str, Any]],
+    answers: list[list[str]],
+    status: str = "answered",
+    config_path: Path = DEFAULT_CC_CONFIG,
+) -> str:
+    settings = load_feishu_settings(project, config_path)
+    async with ClientSession() as session:
+        token = await _tenant_access_token(session, settings)
+        card = build_opencode_question_result_card(
+            request_id, session_id, questions, answers, status
+        )
+        sent = await _patch_json(
+            session,
+            f"{settings['domain']}/open-apis/im/v1/messages/{message_id}",
+            {
+                "msg_type": "interactive",
+                "content": json.dumps(card, ensure_ascii=False),
+            },
+            token,
+        )
+        return str(sent.get("data", {}).get("message_id", message_id))
+
+
 async def _post_json(
     session: ClientSession,
     url: str,

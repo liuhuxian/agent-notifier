@@ -25,7 +25,13 @@ from .codex.backend import CodexBackend
 from .codex.client import CodexAppServerClient
 from .codex.sessions import discover_rollout_thread_ids
 from .config import NotifierConfig, Paths, initialize_user_config
-from .feishu import reply_approval_result_card, send_markdown_message, send_opencode_approval_card, send_text_message
+from .feishu import (
+    reply_approval_result_card,
+    send_markdown_message,
+    send_opencode_approval_card,
+    send_opencode_question_card,
+    send_text_message,
+)
 from .hook_config import (
     decode_command,
     default_hooks_path,
@@ -191,6 +197,119 @@ async def opencode_permission(
         "filepath": filepath,
     }))
     return message_id
+
+
+async def opencode_question(paths: Paths, payload: dict) -> str:
+    """Publish a native OpenCode question and persist its answer metadata."""
+    session_id = str(payload.get("sessionID", ""))
+    request_id = str(payload.get("id", ""))
+    questions = payload.get("questions")
+    if not session_id or not request_id or not isinstance(questions, list):
+        raise ValueError("question payload requires id, sessionID, and questions")
+    for path in (
+        Path(f"/tmp/oc-question-{request_id}.json"),
+        Path(f"/tmp/oc-question-answer-{request_id}.json"),
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    config = NotifierConfig.load(paths.config_file)
+    registry = SessionRegistry(paths.state_db)
+    try:
+        mapping = registry.find_by_thread(session_id)
+        route_name = resolve_thread_route_name(
+            config, registry, session_id, mapping, fallback="default"
+        ) or "default"
+    finally:
+        registry.close()
+    route = config.notification_routes.get(route_name)
+    if route is None:
+        raise ValueError(f"notification route {route_name!r} is not configured")
+    message_id = await send_opencode_question_card(
+        project=route.project,
+        receive_id=route.receive_id,
+        receive_id_type=route.receive_id_type,
+        session_id=session_id,
+        request_id=request_id,
+        questions=questions,
+        session_key=route.session_key,
+    )
+    Path(f"/tmp/oc-question-{request_id}.json").write_text(json.dumps({
+        "message_id": message_id,
+        "project": route.project,
+        "session_id": session_id,
+        "questions": questions,
+    }, ensure_ascii=False))
+    return message_id
+
+
+async def opencode_question_result(
+    request_id: str, answers: list[list[str]], status: str = "answered"
+) -> str:
+    from .feishu import update_opencode_question_card
+    meta_path = Path(f"/tmp/oc-question-{request_id}.json")
+    if not meta_path.exists():
+        raise RuntimeError(f"no OpenCode question found for {request_id}")
+    meta = json.loads(meta_path.read_text())
+    result = await update_opencode_question_card(
+        project=meta["project"],
+        message_id=meta["message_id"],
+        request_id=request_id,
+        session_id=meta["session_id"],
+        questions=meta["questions"],
+        answers=answers,
+        status=status,
+    )
+    meta_path.unlink(missing_ok=True)
+    Path(f"/tmp/oc-question-answer-{request_id}.json").unlink(missing_ok=True)
+    return result
+
+
+def opencode_question_select(request_id: str, question_index: int, option_index: int) -> None:
+    """Record one Feishu option selection for a native OpenCode question."""
+    meta_path = Path(f"/tmp/oc-question-{request_id}.json")
+    if not meta_path.exists():
+        raise RuntimeError(f"no OpenCode question found for {request_id}")
+    meta = json.loads(meta_path.read_text())
+    questions = meta.get("questions", [])
+    if not 0 <= question_index < len(questions):
+        raise ValueError("question index out of range")
+    options = questions[question_index].get("options", [])
+    if not 0 <= option_index < len(options):
+        raise ValueError("option index out of range")
+    answer_path = Path(f"/tmp/oc-question-answer-{request_id}.json")
+    answers = [[] for _ in questions]
+    if answer_path.exists():
+        answers = json.loads(answer_path.read_text()).get("answers", answers)
+    if questions[question_index].get("multiple", False):
+        value = str(options[option_index].get("label", ""))
+        if value not in answers[question_index]:
+            answers[question_index].append(value)
+    else:
+        answers[question_index] = [
+            str(options[option_index].get("label", ""))
+        ]
+    temporary = answer_path.with_suffix(".json.tmp")
+    auto_submit = len(questions) == 1 and not questions[question_index].get("multiple", False)
+    temporary.write_text(json.dumps({
+        "answers": answers,
+        "submitted": auto_submit,
+    }, ensure_ascii=False))
+    os.replace(temporary, answer_path)
+
+
+def opencode_question_submit(request_id: str) -> None:
+    answer_path = Path(f"/tmp/oc-question-answer-{request_id}.json")
+    if not answer_path.exists():
+        raise RuntimeError(f"no OpenCode question answers found for {request_id}")
+    answer = json.loads(answer_path.read_text())
+    answers = answer.get("answers", [])
+    if not answers or not all(isinstance(item, list) and item for item in answers):
+        raise RuntimeError("answer every OpenCode question before submitting")
+    temporary = answer_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps({"answers": answers, "submitted": True}, ensure_ascii=False))
+    os.replace(temporary, answer_path)
 
 
 async def opencode_reply_result(
@@ -1118,6 +1237,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="configured outbound notification route (default: agent_routes.opencode)",
     )
+    oc_question = sub.add_parser(
+        "opencode-question", help="send an OpenCode question choice card"
+    )
+    oc_question.add_argument("--stdin", action="store_true", required=True)
+    oc_question_select = sub.add_parser(
+        "opencode-question-select", help="record an OpenCode question choice"
+    )
+    oc_question_select.add_argument("request_id")
+    oc_question_select.add_argument("question_index", type=int)
+    oc_question_select.add_argument("option_index", type=int)
+    oc_question_submit = sub.add_parser(
+        "opencode-question-submit", help="submit OpenCode question choices"
+    )
+    oc_question_submit.add_argument("request_id")
+    oc_question_result = sub.add_parser(
+        "opencode-question-result", help="update an answered OpenCode question card"
+    )
+    oc_question_result.add_argument("--request", required=True)
+    oc_question_result.add_argument("--stdin", action="store_true", required=True)
+    oc_question_result.add_argument(
+        "--status", choices=("answered", "terminal", "rejected"), default="answered"
+    )
     oc_decide = sub.add_parser(
         "opencode-decide", help="respond to an opencode permission request"
     )
@@ -1352,6 +1493,24 @@ def main() -> None:
                 )
             )
             print(f"sent: {message_id}")
+        elif args.command == "opencode-question":
+            payload = json.loads(sys.stdin.read())
+            message_id = asyncio.run(opencode_question(paths, payload))
+            print(f"sent: {message_id}")
+        elif args.command == "opencode-question-select":
+            opencode_question_select(
+                args.request_id, args.question_index, args.option_index
+            )
+            print("recorded")
+        elif args.command == "opencode-question-submit":
+            opencode_question_submit(args.request_id)
+            print("submitted")
+        elif args.command == "opencode-question-result":
+            payload = json.loads(sys.stdin.read())
+            asyncio.run(opencode_question_result(
+                args.request, payload.get("answers", []), args.status
+            ))
+            print("card updated")
         elif args.command == "opencode-decide":
             asyncio.run(
                 opencode_decide(

@@ -126,6 +126,21 @@ def _configure_approval_commands(source: str, command: str) -> str:
     )
     source = _upsert_command(
         source,
+        "opencode-question-select",
+        "Select an OpenCode question option",
+        (
+            f"{command} opencode-question-select "
+            "{{1}} {{2}} {{3}}"
+        ),
+    )
+    source = _upsert_command(
+        source,
+        "opencode-question-submit",
+        "Submit OpenCode question choices",
+        f"{command} opencode-question-submit {{{{1}}}}",
+    )
+    source = _upsert_command(
+        source,
         "agent-list",
         "List subscribed sessions for one coding agent",
         f"{command} agent-list {{{{1}}}}",

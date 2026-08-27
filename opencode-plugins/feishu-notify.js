@@ -1,6 +1,7 @@
 const IS_ACP_MODE = process.argv?.includes('acp') ?? false
 
 const MAX_CHUNK = 30000
+const pendingQuestions = new Map()
 
 function buildPermissionMessage(props) {
   const meta = props?.metadata || {}
@@ -65,10 +66,14 @@ function chunkText(text, maxLen) {
   return chunks
 }
 
-async function sendMessage(fn$, message) {
+async function sendMessage(fn$, message, sessionID = "") {
   try {
     const home = process.env.HOME || "~"
-    await fn$`${home}/.local/bin/agent-notifier notify -m ${message}`.quiet()
+    if (sessionID) {
+      await fn$`${home}/.local/bin/agent-notifier opencode-notify --session ${sessionID} -m ${message}`.quiet()
+    } else {
+      await fn$`${home}/.local/bin/agent-notifier notify -m ${message}`.quiet()
+    }
   } catch {
     // agent-notifier not available, silently skip
   }
@@ -90,6 +95,80 @@ async function sendToolEvent(payload) {
   } catch {
     // ACP may not be running; tool progress is best effort.
   }
+}
+
+async function sendQuestionAndWait(payload) {
+  const home = process.env.HOME || "~"
+  const { execFile } = require("child_process")
+  const binary = `${home}/.local/bin/agent-notifier`
+  await new Promise((resolve) => {
+    const child = execFile(binary, ["opencode-question", "--stdin"], { timeout: 10000 }, () => resolve())
+    child.stdin.end(JSON.stringify(payload))
+  })
+
+  const fs = require("fs")
+  const answerFile = `/tmp/oc-question-answer-${payload.id}.json`
+  const deadline = Date.now() + 30 * 60 * 1000
+  while (Date.now() < deadline) {
+    if (pendingQuestions.get(payload.id) === false) return null
+    if (fs.existsSync(answerFile)) {
+      try {
+        const answer = JSON.parse(fs.readFileSync(answerFile, "utf8"))
+        if (answer.submitted === true && Array.isArray(answer.answers) && answer.answers.length === payload.questions.length &&
+            answer.answers.every((item) => Array.isArray(item) && item.length > 0)) {
+          fs.unlinkSync(answerFile)
+          return answer.answers
+        }
+      } catch {}
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+  return null
+}
+
+async function replyQuestion(client, requestID, answers, directory) {
+  try {
+    const baseURL = process.env.AGENT_NOTIFIER_OPENCODE_URL || "http://127.0.0.1:4098"
+    const url = new URL(`${baseURL}/question/${encodeURIComponent(requestID)}/reply`)
+    if (directory) url.searchParams.set("directory", directory)
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers }),
+    })
+    if (!response.ok) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function updateQuestionCard(requestID, answers) {
+  const home = process.env.HOME || "~"
+  const { execFile } = require("child_process")
+  await new Promise((resolve) => {
+    const child = execFile(
+      `${home}/.local/bin/agent-notifier`,
+      ["opencode-question-result", "--request", requestID, "--stdin"],
+      { timeout: 10000 },
+      () => resolve(),
+    )
+    child.stdin.end(JSON.stringify({ answers }))
+  })
+}
+
+async function updateTerminalQuestionCard(requestID, answers, status = "terminal") {
+  const home = process.env.HOME || "~"
+  const { execFile } = require("child_process")
+  await new Promise((resolve) => {
+    const child = execFile(
+      `${home}/.local/bin/agent-notifier`,
+      ["opencode-question-result", "--request", requestID, "--status", status, "--stdin"],
+      { timeout: 10000 },
+      () => resolve(),
+    )
+    child.stdin.end(JSON.stringify({ answers }))
+  })
 }
 
 function compactValue(value, maxLen = 12000) {
@@ -122,20 +201,20 @@ async function sendCompletionNotification(fn$, client, event, directory) {
   }
 
   if (!finalText) {
-    await sendMessage(fn$, header)
+    await sendMessage(fn$, header, sessionID)
     return
   }
 
   const body = `${header}\n**结果**:\n\n${finalText}`
   const chunks = chunkText(body, MAX_CHUNK)
   if (chunks.length === 1) {
-    await sendMessage(fn$, chunks[0])
+    await sendMessage(fn$, chunks[0], sessionID)
     return
   }
   for (let i = 0; i < chunks.length; i++) {
     const tag = `[${i + 1}/${chunks.length}]`
     const payload = i === 0 ? `${tag}\n${chunks[i]}` : `${tag}\n${chunks[i]}`
-    await sendMessage(fn$, payload)
+    await sendMessage(fn$, payload, sessionID)
   }
 }
 
@@ -213,6 +292,52 @@ export const FeishuNotify = async ({ $, client, directory }) => {
         return
       }
 
+      if (type === "question.asked") {
+        const props = event?.properties || {}
+        const payload = {
+          id: props.id || "",
+          sessionID: props.sessionID || "",
+          questions: Array.isArray(props.questions) ? props.questions : [],
+        }
+        pendingQuestions.set(payload.id, true)
+        void (async () => {
+          try {
+            const answers = await sendQuestionAndWait(payload)
+            if (answers) {
+              try { require("fs").writeFileSync(`/tmp/oc-question-feishu-${payload.id}.marker`, "1") } catch {}
+              const replied = await replyQuestion(client, payload.id, answers, directory)
+              if (replied) {
+                await updateQuestionCard(payload.id, answers)
+              }
+            }
+          } finally {
+            pendingQuestions.delete(payload.id)
+          }
+        })()
+        return
+      }
+
+      if (type === "question.replied" || type === "question.rejected") {
+        const props = event?.properties || {}
+        const requestID = props.requestID || ""
+        if (!requestID) return
+        pendingQuestions.set(requestID, false)
+        const fs = require("fs")
+        const marker = `/tmp/oc-question-feishu-${requestID}.marker`
+        if (fs.existsSync(marker)) {
+          try { fs.unlinkSync(marker) } catch {}
+          return
+        }
+        const answers = type === "question.replied" && Array.isArray(props.answers)
+          ? props.answers : []
+        await updateTerminalQuestionCard(
+          requestID,
+          answers,
+          type === "question.rejected" ? "rejected" : "terminal",
+        )
+        return
+      }
+
       if (type === "permission.replied") {
         const props = event?.properties || {}
         const pid = props.requestID || ""
@@ -242,7 +367,7 @@ export const FeishuNotify = async ({ $, client, directory }) => {
 
       if (type === "session.error") {
         const message = buildErrorMessage(event?.properties)
-        await sendMessage($, message)
+        await sendMessage($, message, event?.properties?.sessionID || "")
         return
       }
     },

@@ -9,6 +9,7 @@ from agent_notifier.feishu import (
     build_approval_result_card,
     build_markdown_card_v2,
     build_opencode_approval_card,
+    build_opencode_question_card,
     load_feishu_settings,
     send_progress_message_with_onit,
     send_markdown_message,
@@ -17,6 +18,30 @@ from agent_notifier.feishu import (
 
 
 class FeishuCardTest(unittest.TestCase):
+    def test_opencode_question_card_renders_ordered_choices(self):
+        card = build_opencode_question_card(
+            "que-123", "ses-456789", [{
+                "header": "选择模式",
+                "question": "选择一个模式",
+                "options": [
+                    {"label": "自动", "description": "a"},
+                    {"label": "手动", "description": "b"},
+                ],
+                "custom": False,
+            }],
+        )
+        self.assertEqual("OpenCode 问题选择", card["header"]["title"]["content"])
+        self.assertIn("选择一个模式", card["body"]["elements"][1]["content"])
+        buttons = card["body"]["elements"][2]["columns"]
+        self.assertEqual(
+            "cmd:/opencode-question-select que-123 0 1",
+            buttons[1]["elements"][0]["behaviors"][0]["value"]["action"],
+        )
+        self.assertEqual(
+            "cmd:/opencode-question-submit que-123",
+            card["body"]["elements"][-1]["behaviors"][0]["value"]["action"],
+        )
+
     def test_opencode_card_renders_dynamic_choices(self):
         options = [
             {"option_id": "once", "label": "允许一次"},
