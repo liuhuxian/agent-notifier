@@ -9,10 +9,17 @@ import sys
 from typing import TextIO
 
 from .handler import ACPHandler, ACPMethodError, AgentBackend
+from agent_notifier.registry import SessionRegistry
 
 
 class ACPStdioServer:
-    def __init__(self, backend: AgentBackend, stdin: TextIO, stdout: TextIO):
+    def __init__(
+        self,
+        backend: AgentBackend,
+        stdin: TextIO,
+        stdout: TextIO,
+        registry: SessionRegistry | None = None,
+    ):
         self.stdin = stdin
         self.stdout = stdout
         self._write_lock = asyncio.Lock()
@@ -24,6 +31,7 @@ class ACPStdioServer:
             project=os.environ.get("CC_PROJECT", "default"),
             external_key=os.environ.get("CC_SESSION_KEY", "default"),
             emit=self.notify,
+            registry=registry,
         )
 
     async def write(self, payload: dict) -> None:

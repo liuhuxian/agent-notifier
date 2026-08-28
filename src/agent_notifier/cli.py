@@ -937,7 +937,7 @@ async def run_acp(paths: Paths) -> None:
     registry = SessionRegistry(paths.state_db)
     config = NotifierConfig.load(paths.config_file)
     backend = CodexBackend(rpc, registry, config.progress)
-    server = ACPStdioServer(backend, sys.stdin, sys.stdout)
+    server = ACPStdioServer(backend, sys.stdin, sys.stdout, registry)
     rpc.set_server_request_handler(server.handle_codex_request)
     try:
         await server.run()
@@ -971,7 +971,7 @@ async def run_acp_opencode(paths: Paths, base_url: str) -> None:
         config.progress,
         paths.runtime_dir / "opencode-tools.sock",
     )
-    server = ACPStdioServer(backend, sys.stdin, sys.stdout)
+    server = ACPStdioServer(backend, sys.stdin, sys.stdout, registry)
     server_ref["server"] = server
     try:
         await server.run()
@@ -1021,7 +1021,7 @@ async def run_acp_multi(paths: Paths, base_url: str) -> None:
         config_path=paths.config_file,
     )
 
-    server = ACPStdioServer(dispatcher, sys.stdin, sys.stdout)
+    server = ACPStdioServer(dispatcher, sys.stdin, sys.stdout, registry)
     codex_rpc.set_server_request_handler(server.handle_codex_request)
     server_ref["server"] = server
 

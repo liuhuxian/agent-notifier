@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
+from uuid import UUID, uuid4
+
+from agent_notifier.registry import SessionRegistry
 
 
 class AgentBackend(Protocol):
@@ -38,13 +41,46 @@ class ACPHandler:
         project: str,
         external_key: str,
         emit: Callable[[str, dict], Awaitable[None]],
+        registry: SessionRegistry | None = None,
     ):
         self.backend = backend
         self.cwd = cwd
         self.project = project
         self.external_key = external_key
         self.emit = emit
+        self.registry = registry
         self.session_id: str | None = None
+        self._thread_id: str | None = None
+
+    def _new_acp_session_id(self) -> str:
+        return str(uuid4())
+
+    def _remember(self, acp_session_id: str, thread_id: str, cwd: str) -> None:
+        self.session_id = acp_session_id
+        self._thread_id = thread_id
+        if self.registry is not None:
+            self.registry.bind_acp_session(
+                acp_session_id, thread_id, self.project, self.external_key, cwd
+            )
+
+    def _lookup_thread(self, acp_session_id: str) -> str | None:
+        if acp_session_id == self.session_id and self._thread_id:
+            return self._thread_id
+        if self.registry is not None:
+            mapping = self.registry.get_acp_session(acp_session_id)
+            if mapping is not None:
+                self.session_id = acp_session_id
+                self._thread_id = mapping.thread_id
+                return mapping.thread_id
+        return None
+
+    @staticmethod
+    def _looks_like_uuid(value: str) -> bool:
+        try:
+            UUID(value.removeprefix("urn:uuid:"))
+        except (ValueError, AttributeError):
+            return False
+        return True
 
     async def request(self, method: str, params: dict[str, Any]) -> dict:
         if method == "initialize":
@@ -58,25 +94,47 @@ class ACPHandler:
             return {}
         if method == "session/new":
             cwd = params.get("cwd") or self.cwd
-            self.session_id = await self.backend.start_thread(
+            thread_id = await self.backend.start_thread(
                 cwd, self.project, self.external_key
             )
-            return {"sessionId": self.session_id}
+            acp_session_id = self._new_acp_session_id()
+            self._remember(acp_session_id, thread_id, cwd)
+            return {"sessionId": acp_session_id}
         if method == "session/load":
-            session_id = params.get("sessionId")
-            if not session_id:
+            acp_session_id = params.get("sessionId")
+            if not acp_session_id:
                 raise ACPMethodError(-32602, "sessionId is required")
             cwd = params.get("cwd") or self.cwd
-            self.session_id = await self.backend.resume_thread(
-                session_id, cwd, self.project, self.external_key
-            )
+            thread_id = self._lookup_thread(acp_session_id)
+            if thread_id is None:
+                # Compatibility path for a backend-native ID or a Codex UUID
+                # received from an installation predating this mapping.
+                thread_id = await self.backend.resume_thread(
+                    acp_session_id, cwd, self.project, self.external_key
+                )
+                if self._looks_like_uuid(acp_session_id):
+                    mapped_id = acp_session_id
+                else:
+                    mapped_id = self._new_acp_session_id()
+                self._remember(mapped_id, thread_id, cwd)
+            else:
+                # Re-register the native thread with a fresh dispatcher after
+                # an ACP process restart.  Backends use this hook to rebuild
+                # their in-memory subscriber/route map; OpenCode does not
+                # create a second native session when the registry is present.
+                thread_id = await self.backend.resume_thread(
+                    thread_id, cwd, self.project, self.external_key
+                )
+                self._remember(acp_session_id, thread_id, cwd)
             return {"sessionId": self.session_id}
         if method == "session/prompt":
             cc_session_id = params.get("sessionId") or self.session_id
             if not cc_session_id:
                 raise ACPMethodError(-32602, "session is not initialized")
+            transport_thread_id = self._lookup_thread(cc_session_id)
             target_thread_id = self.backend.resolve_active_thread(
-                self.project, self.external_key, cc_session_id
+                self.project, self.external_key,
+                transport_thread_id or cc_session_id,
             )
             text = "".join(
                 block.get("text", "")
@@ -147,8 +205,10 @@ class ACPHandler:
         if method == "session/cancel":
             cc_session_id = params.get("sessionId") or self.session_id
             if cc_session_id:
+                transport_thread_id = self._lookup_thread(cc_session_id)
                 target_thread_id = self.backend.resolve_active_thread(
-                    self.project, self.external_key, cc_session_id
+                    self.project, self.external_key,
+                    transport_thread_id or cc_session_id,
                 )
                 await self.backend.cancel(target_thread_id)
             return {}

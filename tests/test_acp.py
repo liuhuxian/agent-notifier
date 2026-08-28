@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import unittest
+from uuid import UUID
 
 from agent_notifier.acp.handler import ACPHandler
 from agent_notifier.acp.server import ACPStdioServer
@@ -68,17 +69,52 @@ class ACPHandlerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, result["protocolVersion"])
         self.assertTrue(result["agentCapabilities"]["loadSession"])
 
-    async def test_new_and_load_use_codex_thread_ids(self):
+    async def test_acp_uses_uuid_and_keeps_backend_thread_id_private(self):
         created = await self.handler.request("session/new", {"cwd": "/workspace"})
-        self.assertEqual("thread-new", created["sessionId"])
+        UUID(created["sessionId"])
+        self.assertNotEqual("thread-new", created["sessionId"])
         loaded = await self.handler.request(
-            "session/load", {"sessionId": "thread-old", "cwd": "/other"}
+            "session/load", {"sessionId": created["sessionId"], "cwd": "/other"}
         )
-        self.assertEqual("thread-old", loaded["sessionId"])
+        self.assertEqual(created["sessionId"], loaded["sessionId"])
         self.assertEqual(
-            [("thread-old", "/other", "le-wm", "feishu:one")],
+            [("thread-new", "/other", "le-wm", "feishu:one")],
             self.backend.loaded,
         )
+
+    async def test_mapping_survives_handler_restart(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from agent_notifier.registry import SessionRegistry
+
+        with TemporaryDirectory() as tmp:
+            registry = SessionRegistry(Path(tmp) / "state.sqlite3")
+            first = ACPHandler(
+                self.backend,
+                cwd="/workspace",
+                project="le-wm",
+                external_key="feishu:one",
+                emit=self.handler.emit,
+                registry=registry,
+            )
+            created = await first.request("session/new", {"cwd": "/workspace"})
+            second = ACPHandler(
+                self.backend,
+                cwd="/workspace",
+                project="le-wm",
+                external_key="feishu:one",
+                emit=self.handler.emit,
+                registry=registry,
+            )
+            loaded = await second.request(
+                "session/load", {"sessionId": created["sessionId"]}
+            )
+            self.assertEqual(created["sessionId"], loaded["sessionId"])
+            self.assertEqual(
+                [("thread-new", "/workspace", "le-wm", "feishu:one")],
+                self.backend.loaded,
+            )
+            registry.close()
 
     async def test_prompt_forwards_final_text_to_cc_connect_history(self):
         await self.handler.request("session/load", {"sessionId": "thread-old"})

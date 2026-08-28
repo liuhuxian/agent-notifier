@@ -43,6 +43,15 @@ class ThreadRoute:
     cwd: str
 
 
+@dataclass(frozen=True)
+class ACPTransportMapping:
+    acp_session_id: str
+    thread_id: str
+    project: str
+    external_key: str
+    cwd: str
+
+
 class SessionRegistry:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +68,18 @@ class SessionRegistry:
                 cwd TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (adapter, project, external_key)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS acp_transport_sessions (
+                acp_session_id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                external_key TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -200,6 +221,50 @@ class SessionRegistry:
                 (adapter, project, external_key),
             ).fetchone()
         return SessionMapping(*row) if row else None
+
+    def bind_acp_session(
+        self,
+        acp_session_id: str,
+        thread_id: str,
+        project: str,
+        external_key: str,
+        cwd: str,
+    ) -> ACPTransportMapping:
+        mapping = ACPTransportMapping(
+            str(acp_session_id), str(thread_id), str(project),
+            str(external_key), str(cwd),
+        )
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO acp_transport_sessions
+                    (acp_session_id, thread_id, project, external_key, cwd)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(acp_session_id) DO UPDATE SET
+                    thread_id = excluded.thread_id,
+                    project = excluded.project,
+                    external_key = excluded.external_key,
+                    cwd = excluded.cwd,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    mapping.acp_session_id, mapping.thread_id,
+                    mapping.project, mapping.external_key, mapping.cwd,
+                ),
+            )
+        return mapping
+
+    def get_acp_session(self, acp_session_id: str) -> ACPTransportMapping | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT acp_session_id, thread_id, project, external_key, cwd
+                FROM acp_transport_sessions
+                WHERE acp_session_id = ?
+                """,
+                (acp_session_id,),
+            ).fetchone()
+        return ACPTransportMapping(*row) if row else None
 
     def set_thread_route(
         self,
